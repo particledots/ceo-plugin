@@ -18,9 +18,19 @@ jobs:
       - uses: actions/checkout@v4
       - name: Build and run the engine test
         run: |
-          cmake -S . -B build-test -DCEO_BUILD_PLUGIN=OFF -DCMAKE_BUILD_TYPE=Release
-          cmake --build build-test -j 4
-          ctest --test-dir build-test --output-on-failure
+          set +e
+          ( cmake -S . -B build-test -DCEO_BUILD_PLUGIN=OFF -DCMAKE_BUILD_TYPE=Release \
+            && cmake --build build-test -j 4 \
+            && ctest --test-dir build-test --output-on-failure -V ) > engine-test.log 2>&1
+          code=$?
+          tail -n 40 engine-test.log
+          # Result is also written as annotations (shown on the run page and readable through the API).
+          if [ $code -ne 0 ]; then
+            echo "::error::ENGINE-TEST: failed (exit code $code)"
+            grep -E "error|FAIL|engine tests:" engine-test.log | head -15 | while IFS= read -r line; do echo "::error::ENGINE-TEST: $line"; done
+            exit 1
+          fi
+          echo "::notice::ENGINE-TEST: $(grep -h 'engine tests:' engine-test.log | head -n 1)"
 
   build-macos:
     name: Build AU + VST3 (macOS)
@@ -29,10 +39,27 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Configure
-        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+        run: |
+          set +e
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release > configure.log 2>&1; code=$?
+          tail -n 20 configure.log
+          if [ $code -ne 0 ]; then
+            echo "::error::CONFIGURE: failed (exit code $code)"
+            grep -iE "error" configure.log | head -10 | while IFS= read -r line; do echo "::error::CONFIGURE: $line"; done
+            exit 1
+          fi
 
       - name: Build AU and VST3
-        run: cmake --build build --config Release --target Ceo_AU Ceo_VST3 -j 4
+        run: |
+          set +e
+          cmake --build build --config Release --target Ceo_AU Ceo_VST3 -j 4 > build.log 2>&1; code=$?
+          tail -n 30 build.log
+          if [ $code -ne 0 ]; then
+            echo "::error::BUILD: failed (exit code $code)"
+            grep -E "error:|Error " build.log | head -15 | while IFS= read -r line; do echo "::error::BUILD: $line"; done
+            exit 1
+          fi
+          echo "::notice::BUILD: AU and VST3 compiled"
 
       - name: Locate the built plugins
         id: find

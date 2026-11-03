@@ -25,7 +25,7 @@ public:
     bool acceptsMidi() const override  { return false; }
     bool producesMidi() const override { return false; }
     bool isMidiEffect() const override { return false; }
-    double getTailLengthSeconds() const override { return 0.0; }
+    double getTailLengthSeconds() const override { return 3.0; }   // grains can ring on for up to 3 s after the input stops
 
     int getNumPrograms() override { return 1; }
     int getCurrentProgram() override { return 0; }

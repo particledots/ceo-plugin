@@ -3,9 +3,12 @@
 An original AU / VST3 granular effect for Logic Pro, inspired by the feel of a granular
 Eurorack module. All DSP is our own code; it is not a port or copy of anything.
 
-Status: **milestone 2, project skeleton.** It loads in Logic as an audio effect, passes
-audio through unchanged, and shows generic sliders for every control in the design spec.
-There is no granular sound yet (that is milestone 3).
+Status: **milestone 3, first sound (awaiting testing in Logic).** Press Capture to record
+up to 10 s (plus a 3 s tail) into layer α, release it to stop, then turn Dry/wet up: grains
+play from the recording, shaped by Length, Scan, Spray, Intensity, Grain window, Grain
+direction and Pitch. Input level, Dry/wet and Output level work. Still generic sliders.
+Not yet working: Strike, Pitch deviation, layers β to Ω, Dub, Erase/Undo, Follow mode,
+Mod, Hold, Sense, Wavetable mode (milestones 4 and 5).
 
 ## Folders
 
