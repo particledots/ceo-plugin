@@ -8,8 +8,8 @@
 // Milestone 4: all six layers (alpha to zeta) and Omega (all six end to end along
 // Scan), Capture into the selected layer with Dub (replace / sound on sound),
 // one-step Undo and Erase, Strike grains, Pitch deviation and Follow mode.
-// Still to come:
-//   - Mod amount, Hold, Sense, onset detection, Wavetable mode: milestone 5
+// Milestone 5: onset detection (Onset capture, Hold, Sense), Mono/Stereo input
+// mode, the Mod section (Pan, Hold, Reverb, Delay) and Wavetable mode.
 
 #pragma once
 
@@ -24,6 +24,11 @@ constexpr float kTailSeconds          = 3.0f;   // extra seconds recorded after 
 constexpr int   kMaxGrains            = 88;     // both grain engines together
 constexpr int   kMaxContinuousGrains  = 44;     // continuous engine's share
 constexpr int   kMaxStrikeGrains      = 44;     // Strike engine's share
+constexpr int   kMaxWtNotes           = 8;      // Strike notes in Wavetable mode
+constexpr float kPreRollSeconds       = 0.030f; // audio kept from just before a detected onset, so the attack is not clipped
+
+// What the Mod amount knob controls (Params::modTarget).
+enum ModTarget { kModPan = 0, kModHold = 1, kModReverb = 2, kModDelay = 3 };
 
 // All control values the engine can be given. Knobs run from 0.0 to 1.0
 // (0.5 is the centre position). Every value is "as the knob is set"; the engine
@@ -43,6 +48,9 @@ struct Params
     bool  undo           = false;  // every change undoes the last record-over (one step)
     bool  follow         = false;  // Follow mode: Scan becomes a speed control
     int   layer          = 0;      // 0..5 = alpha..zeta, 6 = Omega (all six, end to end along Scan)
+    bool  stereoInput    = false;  // false = Mono input mode, true = Stereo input mode (left = input 1, right = input 2)
+    bool  onsetCapture   = false;  // on = a detected onset starts recording into the selected layer (Mono input mode only)
+    int   modTarget      = 0;      // ModTarget: 0 Pan, 1 Hold, 2 Reverb, 3 Delay
 
     // Grain controls
     float intensity      = 0.5f;
@@ -53,9 +61,9 @@ struct Params
     float spray          = 0.0f;
     float pitch          = 0.5f;
     float pitchDeviation = 0.5f;
-    float modAmount      = 0.0f;   // milestone 5
-    float hold           = 0.5f;   // milestone 5
-    float sense          = 0.5f;   // milestone 5
+    float modAmount      = 0.5f;   // centre = off; above and below centre act on the Mod target
+    float hold           = 0.5f;   // onset record time and re-arm time; Follow mode loop length
+    float sense          = 0.5f;   // onset sensitivity (Mono input); level of the right-hand input (Stereo input)
     float dub            = 0.5f;
 };
 
@@ -96,6 +104,15 @@ public:
     int    activeGrainCount() const;          // continuous and Strike grains together
     int    activeStrikeGrainCount() const;
     double playheadSeconds() const;           // Follow mode playhead, from the start of the layer (or of alpha in Omega)
+    bool   layerIsStereo (int layer) const;   // true if that layer holds a two-channel recording
+    int    onsetCount() const;                // onsets that started a recording since the engine was created
+    bool   onsetArmed() const;                // true when a new onset would be accepted
+    bool   wavetableActive() const;           // true while the oscillator is audible (continuous or Strike notes)
+
+    // The recorded audio of one layer (channel 0 = left, 1 = right; the right side only holds
+    // something different from the left in a stereo layer). nullptr if out of range. Read only.
+    const float* layerAudio (int layer, int channel) const;
+    int    layerAudioLength() const;          // samples in each of those arrays (10 s plus the tail)
 
 private:
     struct Impl;

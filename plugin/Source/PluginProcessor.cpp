@@ -39,6 +39,9 @@ ceo::Params CeoAudioProcessor::readParams() const
     p.undo           = get (CeoParams::undo) > 0.5f;
     p.follow         = get (CeoParams::follow) > 0.5f;
     p.layer          = (int) (get (CeoParams::layer) + 0.5f);
+    p.stereoInput    = (int) (get (CeoParams::inputMode) + 0.5f) == 1;
+    p.onsetCapture   = get (CeoParams::onsetCapture) > 0.5f;
+    p.modTarget      = (int) (get (CeoParams::modTarget) + 0.5f);
     p.intensity      = get (CeoParams::intensity);
     p.grainWindow    = get (CeoParams::grainWindow);
     p.grainDirection = get (CeoParams::grainDirection);

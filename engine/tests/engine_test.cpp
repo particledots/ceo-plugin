@@ -472,6 +472,7 @@ static void testFuzz()
             p.intensity = rnd(); p.grainWindow = rnd(); p.grainDirection = rnd(); p.length = rnd();
             p.scan = rnd(); p.spray = rnd(); p.pitch = rnd(); p.pitchDeviation = rnd();
             p.modAmount = rnd(); p.hold = rnd(); p.sense = rnd(); p.dub = rnd();
+            p.stereoInput = rnd() > 0.5f; p.onsetCapture = rnd() > 0.5f; p.modTarget = (int) (rnd() * 3.99f);
 
             const int n = 1 + (int) (rnd() * 700.0f);
             std::vector<float> a ((size_t) n), b ((size_t) n);
@@ -844,7 +845,7 @@ static void testFollow()
         e.prepare (kSr, kBlock, 2);
         record (e, ramp);
         ceo::Params p;
-        p.dryWet = 1.0f; p.follow = true; p.scan = scanKnob; p.length = 0.3f; p.grainWindow = 0.0f; p.intensity = 0.2f;
+        p.dryWet = 1.0f; p.hold = 1.0f; p.follow = true; p.scan = scanKnob; p.length = 0.3f; p.grainWindow = 0.0f; p.intensity = 0.2f;
         return process (e, p, silence (seconds)).L;
     };
     auto level = [] (const std::vector<float>& v, double t0, double t1) { return rms (v, (size_t) (t0 * kSr), (size_t) (t1 * kSr)); };
@@ -878,7 +879,7 @@ static void testFollow()
         e.prepare (kSr, kBlock, 2);
         record (e, ramp);
         ceo::Params p;
-        p.dryWet = 1.0f; p.follow = true; p.scan = knobForSpeed (1.0f); p.length = 0.3f; p.grainWindow = 0.0f; p.intensity = 0.2f;
+        p.dryWet = 1.0f; p.hold = 1.0f; p.follow = true; p.scan = knobForSpeed (1.0f); p.length = 0.3f; p.grainWindow = 0.0f; p.intensity = 0.2f;
         process (e, p, silence (1.5));
         CHECK (std::fabs (e.playheadSeconds() - 1.5) < 0.05, "playhead after 1.5 s at normal speed: %f", e.playheadSeconds());
         click (e, p, p.strike);
@@ -899,7 +900,7 @@ static void testFollow()
         e.prepare (kSr, kBlock, 2);
         record (e, ramp);
         ceo::Params p;
-        p.dryWet = 1.0f; p.follow = true; p.scan = knobForSpeed (1.0f);
+        p.dryWet = 1.0f; p.hold = 1.0f; p.follow = true; p.scan = knobForSpeed (1.0f);
         process (e, p, silence (1.0));
         p.follow = false;
         process (e, p, silence (0.5));
@@ -914,9 +915,427 @@ static void testFollow()
         e.prepare (kSr, kBlock, 2);
         record (e, ramp);
         ceo::Params p;
-        p.dryWet = 1.0f; p.follow = true; p.layer = 6; p.scan = knobForSpeed (20.0f);
+        p.dryWet = 1.0f; p.hold = 1.0f; p.follow = true; p.layer = 6; p.scan = knobForSpeed (20.0f);
         process (e, p, silence (5.0));                  // 5 s at 20x = 100 s of material, 60 s of it in Omega
         CHECK (e.playheadSeconds() >= 0.0 && e.playheadSeconds() < 60.0, "Omega playhead stays inside the 60 s: %f", e.playheadSeconds());
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Milestone 5
+// ---------------------------------------------------------------------------
+
+// Noise bursts (fast attack, decaying) at the given times, on a very quiet floor.
+static std::vector<float> bursts (double seconds, const std::vector<double>& times, float amp)
+{
+    std::vector<float> v = silence (seconds);
+    uint32_t s = 24680u;
+    auto rnd = [&s]() { s = s * 1664525u + 1013904223u; return (float) (s >> 8) / 16777216.0f * 2.0f - 1.0f; };
+    for (size_t i = 0; i < v.size(); ++i)
+        v[i] = 0.0005f * rnd();
+    for (double t : times)
+    {
+        const size_t from = (size_t) (t * kSr);
+        const size_t len  = (size_t) (0.25 * kSr);
+        for (size_t i = 0; i < len && from + i < v.size(); ++i)
+        {
+            const float env = std::exp (-(float) i / (0.05f * (float) kSr));
+            const float fadeOut = i + 200 > len ? (float) (len - i) / 200.0f : 1.0f;
+            v[from + i] += amp * env * fadeOut * rnd();
+        }
+    }
+    return v;
+}
+
+// Runs a signal through the engine and reports when recording started and stopped.
+struct RecTimes { double start = -1.0, stop = -1.0; };
+static RecTimes processWatching (ceo::Engine& e, const ceo::Params& p, const std::vector<float>& in)
+{
+    RecTimes t;
+    size_t pos = 0;
+    while (pos < in.size())
+    {
+        const int n = (int) std::min<size_t> (kBlock, in.size() - pos);
+        std::vector<float> a (in.begin() + (long) pos, in.begin() + (long) pos + n), b = a;
+        float* ch[2] = { a.data(), b.data() };
+        e.setParams (p);
+        e.process (ch, 2, n);
+        if (e.isRecording() && t.start < 0.0) t.start = (double) pos / kSr;
+        if (t.start >= 0.0 && ! e.isRecording() && t.stop < 0.0) t.stop = (double) pos / kSr;
+        pos += (size_t) n;
+    }
+    return t;
+}
+
+// Different material on the two input channels.
+static void processTwo (ceo::Engine& e, const ceo::Params& p, std::vector<float> a, std::vector<float> b)
+{
+    for (size_t pos = 0; pos < a.size(); pos += kBlock)
+    {
+        const int n = (int) std::min<size_t> (kBlock, a.size() - pos);
+        float* ch[2] = { a.data() + pos, b.data() + pos };
+        e.setParams (p);
+        e.process (ch, 2, n);
+    }
+}
+
+static void testOnsetCapture()
+{
+    using namespace ceo::map;
+    {
+        ceo::Engine e;
+        e.prepare (kSr, kBlock, 2);
+        ceo::Params p;
+        p.dryWet = 0.0f;
+        p.onsetCapture = true;
+        p.sense = 0.6f;
+        p.hold = 0.3f;
+        const float holdLen = holdSeconds (0.3f);
+
+        process (e, p, bursts (1.0, {}, 0.5f));
+        CHECK (e.onsetCount() == 0 && ! e.isRecording(), "quiet floor must not trigger");
+        CHECK (e.onsetArmed(), "should be armed");
+
+        const RecTimes t = processWatching (e, p, bursts (2.0, { 0.3 }, 0.5f));
+        CHECK (e.onsetCount() == 1, "one burst = one onset (count %d)", e.onsetCount());
+        CHECK (t.start > 0.29 && t.start < 0.36, "recording started at %f", t.start);
+        CHECK (t.stop > 0, "recording must stop by itself");
+        CHECK (std::fabs ((t.stop - t.start) - holdLen) < 0.1, "recorded %f s, hold is %f s", t.stop - t.start, holdLen);
+        CHECK (e.layerHasContent (0), "layer alpha should now hold the burst");
+
+        const float* a = e.layerAudio (0, 0);
+        CHECK (a != nullptr, "layer audio");
+        if (a != nullptr)
+        {
+            double firstLoud = -1.0;
+            for (int i = 0; i < (int) (0.2 * kSr); ++i)
+                if (std::fabs (a[i]) > 0.05f) { firstLoud = (double) i / kSr; break; }
+            CHECK (firstLoud >= 0.0 && firstLoud < 0.06, "attack should sit at the start of the layer (%f)", firstLoud);
+        }
+    }
+
+    {   // Hold also debounces.
+        ceo::Engine e;
+        e.prepare (kSr, kBlock, 2);
+        ceo::Params p;
+        p.dryWet = 0.0f; p.onsetCapture = true; p.sense = 0.6f; p.hold = 0.6f;
+        process (e, p, bursts (3.0, { 0.3, 1.2, 2.0 }, 0.5f));
+        CHECK (e.onsetCount() == 1, "bursts inside the hold time must be ignored (count %d)", e.onsetCount());
+    }
+
+    {   // Short hold: separate bursts each start a recording.
+        ceo::Engine e;
+        e.prepare (kSr, kBlock, 2);
+        ceo::Params p;
+        p.dryWet = 0.0f; p.onsetCapture = true; p.sense = 0.6f; p.hold = 0.15f;
+        process (e, p, bursts (4.0, { 0.3, 1.2, 2.2, 3.1 }, 0.5f));
+        CHECK (e.onsetCount() == 4, "four separate bursts = four onsets (count %d)", e.onsetCount());
+    }
+
+    {   // Stereo input mode: off.
+        ceo::Engine e;
+        e.prepare (kSr, kBlock, 2);
+        ceo::Params p;
+        p.dryWet = 0.0f; p.onsetCapture = true; p.sense = 0.6f; p.stereoInput = true;
+        process (e, p, bursts (1.5, { 0.3 }, 0.5f));
+        CHECK (e.onsetCount() == 0 && ! e.isRecording(), "no onset capture in Stereo input mode");
+    }
+
+    {   // Switch off: nothing.
+        ceo::Engine e;
+        e.prepare (kSr, kBlock, 2);
+        ceo::Params p;
+        p.dryWet = 0.0f; p.sense = 0.6f;
+        process (e, p, bursts (1.5, { 0.3 }, 0.5f));
+        CHECK (e.onsetCount() == 0, "off means off");
+    }
+
+    {   // Sense: turning it up never catches less, and somewhere between soft and loud there is a burst only high Sense catches.
+        bool gap = false, never_less = true;
+        for (float amp : { 0.1f, 0.05f, 0.02f, 0.01f, 0.005f, 0.0025f, 0.0015f, 0.001f })
+        {
+            ceo::Engine lo, hi;
+            lo.prepare (kSr, kBlock, 2); hi.prepare (kSr, kBlock, 2);
+            ceo::Params p;
+            p.dryWet = 0.0f; p.onsetCapture = true; p.hold = 0.15f;
+            auto in = bursts (1.5, { 0.4 }, amp);
+            p.sense = 0.0f; process (lo, p, in);
+            p.sense = 1.0f; process (hi, p, in);
+            if (hi.onsetCount() < lo.onsetCount()) never_less = false;
+            if (lo.onsetCount() == 0 && hi.onsetCount() >= 1) gap = true;
+        }
+        CHECK (never_less, "high Sense must catch at least what low Sense catches");
+        CHECK (gap, "some soft burst should be caught only with Sense high");
+    }
+}
+
+static void testStereoInput()
+{
+    auto left  = sine (0.5, 300.0, 0.5f);
+    auto right = sine (0.5, 700.0, 0.5f);
+
+    ceo::Engine e;
+    e.prepare (kSr, kBlock, 2);
+    ceo::Params p;
+    p.dryWet = 0.0f; p.stereoInput = true; p.sense = 0.5f;
+    process (e, p, silence (0.02));
+    p.capture = true;
+    processTwo (e, p, left, right);
+    p.capture = false;
+    process (e, p, silence (0.05));
+    CHECK (e.layerHasContent (0) && e.layerIsStereo (0), "stereo recording expected");
+    const float* l = e.layerAudio (0, 0);
+    const float* r = e.layerAudio (0, 1);
+    double diff = 0.0, lp = 0.0, rp = 0.0;
+    for (int i = 4800; i < 24000; ++i) { diff += std::fabs (l[i] - r[i]); lp += l[i] * l[i]; rp += r[i] * r[i]; }
+    CHECK (diff > 100.0 && lp > 100.0 && rp > 100.0, "left and right should differ (diff %f)", diff);
+
+    ceo::Engine m;
+    m.prepare (kSr, kBlock, 2);
+    record (m, left);
+    CHECK (m.layerHasContent (0) && ! m.layerIsStereo (0), "mono recording expected");
+
+    // Sense at the bottom = right-hand input silent.
+    ceo::Engine q;
+    q.prepare (kSr, kBlock, 2);
+    ceo::Params s;
+    s.dryWet = 0.0f; s.stereoInput = true; s.sense = 0.0f;
+    process (q, s, silence (0.02));
+    s.capture = true;
+    processTwo (q, s, left, right);
+    s.capture = false;
+    process (q, s, silence (0.05));
+    const float* qr = q.layerAudio (0, 1);
+    double qp = 0.0;
+    for (int i = 4800; i < 24000; ++i) qp += qr[i] * qr[i];
+    CHECK (qp < 1e-6, "Sense at the bottom silences the right-hand input (%f)", qp);
+
+    // A stereo layer with sound only on the left: playback with no Mod keeps it left-heavy.
+    ceo::Engine g;
+    g.prepare (kSr, kBlock, 2);
+    ceo::Params gp;
+    gp.dryWet = 0.0f; gp.stereoInput = true; gp.sense = 0.5f;
+    process (g, gp, silence (0.02));
+    gp.capture = true;
+    processTwo (g, gp, left, silence (0.5));
+    gp.capture = false;
+    process (g, gp, silence (0.05));
+    g.reset();
+    gp.dryWet = 1.0f; gp.length = 0.3f; gp.modAmount = 1.0f; gp.modTarget = ceo::kModPan;
+    auto out = process (g, gp, silence (1.0));
+    CHECK (rms (out.L, 12000, 48000) > 0.005f && rms (out.R, 12000, 48000) > 0.005f, "folded to mono: both sides carry sound (%f %f)",
+           rms (out.L, 12000, 48000), rms (out.R, 12000, 48000));
+}
+
+static void testModSection()
+{
+    auto src = sine (1.0, 330.0, 0.4f);
+    auto render = [&] (int target, float amount, bool silent)
+    {
+        ceo::Engine e;
+        e.prepare (kSr, kBlock, 2);
+        record (e, src);
+        ceo::Params p;
+        p.dryWet = 0.6f; p.length = 0.3f; p.modTarget = target; p.modAmount = amount;
+        return process (e, p, silent ? silence (3.0) : src);
+    };
+
+    {   // Centre = off.
+        auto a = render (ceo::kModReverb, 0.5f, true);
+        auto b = render (ceo::kModDelay, 0.5f, true);
+        bool same = true;
+        for (size_t i = 0; i < a.L.size(); ++i) if (a.L[i] != b.L[i] || a.R[i] != b.R[i]) { same = false; break; }
+        CHECK (same, "Mod at centre must change nothing");
+    }
+
+    for (int t = 0; t < 4; ++t)
+        for (float amt : { 0.0f, 0.1f, 0.3f, 0.52f, 0.7f, 0.95f, 1.0f })
+        {
+            auto o = render (t, amt, false);
+            CHECK (allFiniteAndBounded (o, 8.0f), "target %d amount %f unstable", t, amt);
+        }
+
+    {   // Delay up: echoes.
+        ceo::Engine e;
+        e.prepare (kSr, kBlock, 2);
+        ceo::Params p;
+        p.dryWet = 0.0f; p.modTarget = ceo::kModDelay; p.modAmount = 0.8f;
+        auto in = sine (0.3, 440.0, 0.5f);
+        in.resize ((size_t) (3.0 * kSr), 0.0f);
+        auto o = process (e, p, in);
+        CHECK (rms (o.L, (size_t) (0.5 * kSr), (size_t) (2.0 * kSr)) > 0.005f, "delay up should echo after the sound stops");
+    }
+
+    {   // Delay down: rings and stays stable.
+        ceo::Engine e;
+        e.prepare (kSr, kBlock, 2);
+        ceo::Params p;
+        p.dryWet = 0.0f; p.modTarget = ceo::kModDelay; p.modAmount = 0.2f;
+        auto in = silence (3.0);
+        for (int i = 0; i < 200; ++i) in[(size_t) i] = 0.5f;
+        auto o = process (e, p, in);
+        CHECK (allFiniteAndBounded (o, 4.0f), "metallic delay stable");
+        CHECK (rms (o.L, (size_t) (0.3 * kSr), (size_t) (0.6 * kSr)) > 0.001f, "metallic delay should ring");
+    }
+
+    {   // Reverb up: longer tail with more Mod.
+        float tail[2];
+        const float amts[2] = { 0.7f, 0.9f };
+        for (int k = 0; k < 2; ++k)
+        {
+            ceo::Engine e;
+            e.prepare (kSr, kBlock, 2);
+            ceo::Params p;
+            p.dryWet = 0.0f; p.modTarget = ceo::kModReverb; p.modAmount = amts[k];
+            auto in = sine (0.3, 440.0, 0.5f);
+            in.resize ((size_t) (6.0 * kSr), 0.0f);
+            auto o = process (e, p, in);
+            tail[k] = rms (o.L, (size_t) (4.0 * kSr), (size_t) (5.5 * kSr));
+        }
+        CHECK (tail[0] > 0.0f && tail[1] > tail[0], "reverb tail should be longer with more Mod (%f %f)", tail[0], tail[1]);
+    }
+
+    {   // Freeze and direct-sound removal.
+        ceo::Engine e;
+        e.prepare (kSr, kBlock, 2);
+        ceo::Params p;
+        p.dryWet = 0.0f; p.modTarget = ceo::kModReverb; p.modAmount = 1.0f;
+        auto in = sine (0.5, 440.0, 0.5f);
+        in.resize ((size_t) (20.0 * kSr), 0.0f);
+        auto o = process (e, p, in);
+        const float a = rms (o.L, (size_t) (3.0 * kSr), (size_t) (5.0 * kSr));
+        const float b = rms (o.L, (size_t) (17.0 * kSr), (size_t) (19.0 * kSr));
+        CHECK (a > 0.005f && b > 0.8f * a && b < 1.3f * a, "frozen reverb should hold steady (%f then %f)", a, b);
+
+        ceo::Engine d;
+        d.prepare (kSr, kBlock, 2);
+        ceo::Params q;
+        q.dryWet = 0.0f; q.modTarget = ceo::kModReverb; q.modAmount = 0.0f;
+        auto o2 = process (d, q, sine (1.0, 440.0, 0.5f));
+        CHECK (rms (o2.L, 24000, 48000) < 0.5f * rms (sine (1.0, 440.0, 0.5f), 24000, 48000), "bottom: direct sound is mostly gone");
+    }
+
+    {   // Hold target.
+        double len[2];
+        const float amts[2] = { 0.5f, 1.0f };
+        for (int k = 0; k < 2; ++k)
+        {
+            ceo::Engine e;
+            e.prepare (kSr, kBlock, 2);
+            ceo::Params p;
+            p.dryWet = 0.0f; p.onsetCapture = true; p.sense = 0.6f; p.hold = 0.2f;
+            p.modTarget = ceo::kModHold; p.modAmount = amts[k];
+            const RecTimes t = processWatching (e, p, bursts (5.0, { 0.3 }, 0.5f));
+            len[k] = t.stop - t.start;
+        }
+        CHECK (len[0] > 0 && len[1] > len[0] + 0.3, "Mod on Hold lengthens the recording (%f vs %f)", len[0], len[1]);
+    }
+
+    {   // Pan down: sound on both sides over time.
+        ceo::Engine e;
+        e.prepare (kSr, kBlock, 2);
+        record (e, src);
+        ceo::Params p;
+        p.dryWet = 1.0f; p.length = 0.3f; p.modTarget = ceo::kModPan; p.modAmount = 0.0f;
+        auto o = process (e, p, silence (3.0));
+        double lo = 0, ro = 0;
+        for (size_t i = 24000; i < o.L.size(); ++i) { lo += (double) o.L[i] * o.L[i]; ro += (double) o.R[i] * o.R[i]; }
+        CHECK (lo > 0 && ro > 0, "both sides get sound with coin-toss panning");
+    }
+}
+
+static void testWavetable()
+{
+    auto tone = sine (1.0, 300.0, 0.5f);
+
+    ceo::Engine e;
+    e.prepare (kSr, kBlock, 2);
+    record (e, tone);
+
+    ceo::Params p;
+    p.dryWet = 1.0f; p.length = 0.0f; p.intensity = 0.7f; p.pitch = 0.5f; p.pitchDeviation = 0.5f;
+    p.scan = 0.03f; p.spray = 0.0f;
+    auto o = process (e, p, silence (2.0));
+    CHECK (e.wavetableActive(), "oscillator should be sounding");
+    CHECK (rms (o.L, 48000, 96000) > 0.02f, "oscillator audible (%f)", rms (o.L, 48000, 96000));
+    const double p0  = tonePower (o.L, 48000, 96000, 130.8128);
+    const double p13 = tonePower (o.L, 48000, 96000, 13.0 * 130.8128);
+    CHECK (p13 > 20.0 * std::max (p0, 1e-9), "tone colour should come out as a harmonic (fundamental %g, 13th %g)", p0, p13);
+
+    ceo::Engine e2;
+    e2.prepare (kSr, kBlock, 2);
+    record (e2, tone);
+    p.pitch = 0.75f;
+    auto o2 = process (e2, p, silence (2.0));
+    const double up = tonePower (o2.L, 48000, 96000, 13.0 * 261.6256);
+    CHECK (up > 20.0 * std::max (tonePower (o2.L, 48000, 96000, 13.0 * 130.8128), 1e-9), "octave up (%g)", up);
+
+    p.pitch = 0.5f;
+    p.intensity = 0.0f;
+    auto o3 = process (e, p, silence (2.0));
+    CHECK (rms (o3.L, 72000, 96000) < 0.001f, "intensity at bottom silences the oscillator (%f)", rms (o3.L, 72000, 96000));
+    CHECK (! e.wavetableActive(), "oscillator inactive");
+
+    ceo::Params s = p;
+    s.intensity = 0.0f;
+    process (e, s, silence (0.1));
+    s.strike = ! s.strike;
+    auto hit = process (e, s, silence (0.1));
+    CHECK (e.wavetableActive(), "Strike should start a note");
+    CHECK (rms (hit.L, 0, 4800) > 0.001f, "note audible (%f)", rms (hit.L, 0, 4800));
+    auto after = process (e, s, silence (1.5));
+    CHECK (! e.wavetableActive(), "note should finish");
+    CHECK (rms (after.L, 48000, 72000) < 1e-4f, "silent after the note");
+
+    ceo::Params g = p;
+    g.length = 0.3f; g.intensity = 0.6f;
+    auto og = process (e, g, silence (1.0));
+    CHECK (! e.wavetableActive(), "no oscillator with normal grains");
+    CHECK (rms (og.L, 24000, 48000) > 0.01f, "grains still play");
+
+    uint32_t sd = 13579u;
+    auto rnd = [&sd]() { sd = sd * 1664525u + 1013904223u; return (float) (sd >> 8) / 16777216.0f; };
+    for (int round = 0; round < 20; ++round)
+    {
+        ceo::Engine f;
+        f.prepare (kSr, 512, 2);
+        record (f, round & 1 ? tone : bursts (1.0, { 0.1, 0.5 }, 0.5f));
+        for (int step = 0; step < 6; ++step)
+        {
+            ceo::Params w;
+            w.dryWet = 1.0f; w.length = rnd() * 0.08f; w.intensity = rnd(); w.pitch = rnd(); w.pitchDeviation = rnd();
+            w.scan = rnd(); w.spray = rnd(); w.grainDirection = rnd(); w.grainWindow = rnd(); w.strike = rnd() > 0.5f;
+            w.modTarget = (int) (rnd() * 3.99f); w.modAmount = rnd();
+            auto r = process (f, w, sine (0.4, 200.0 + 800.0 * rnd(), 0.5f));
+            CHECK (allFiniteAndBounded (r, 8.0f), "wavetable sweep round %d step %d", round, step);
+        }
+    }
+}
+
+static void testMilestone5Mapping()
+{
+    using namespace ceo::map;
+    CHECK (std::fabs (holdSeconds (0.5f) - 2.5f) < 1e-4f && std::fabs (holdSeconds (1.0f) - 10.0f) < 1e-3f && std::fabs (holdSeconds (0.0f) - 0.005f) < 1e-5f, "hold ends");
+    for (float k = 0.0f; k < 0.99f; k += 0.01f)
+        CHECK (holdSeconds (k + 0.01f) > holdSeconds (k), "hold not rising at %f", k);
+    CHECK (modBipolar (0.5f) == 0.0f && modBipolar (0.51f) == 0.0f, "Mod flat spot");
+    CHECK (std::fabs (modBipolar (1.0f) - 1.0f) < 1e-5f && std::fabs (modBipolar (0.0f) + 1.0f) < 1e-5f, "Mod ends");
+    CHECK (onsetSensitivity (1.0f).ratio < onsetSensitivity (0.0f).ratio && onsetSensitivity (1.0f).floorFlux < onsetSensitivity (0.0f).floorFlux, "Sense up = more sensitive");
+    CHECK (wavetableMix (0.0f) == 1.0f && wavetableMix (0.06f) == 0.0f && wavetableMix (0.5f) == 0.0f, "wavetable crossfade ends");
+    for (float k = 0.0f; k < 0.06f; k += 0.002f)
+        CHECK (wavetableMix (k + 0.002f) <= wavetableMix (k), "crossfade monotone at %f", k);
+    CHECK (std::fabs (wavetableMorphSeconds (0.0f) - 0.01f) < 1e-5f && wavetableMorphSeconds (1.0f) > 2.9f, "morph time ends");
+    CHECK (! reverbMap (0.0f).active && ! delayMap (0.0f).active, "no effect at centre");
+    CHECK (reverbMap (1.0f).freeze && reverbMap (-1.0f).freeze && ! reverbMap (0.5f).freeze, "freeze only at the extremes");
+    CHECK (delayMap (-0.5f).metallic && ! delayMap (0.5f).metallic, "metallic only below centre");
+    for (int i = 0; i < 100; ++i)
+    {
+        const float u1 = (float) i / 99.0f;
+        for (float d = -1.0f; d <= 1.0f; d += 0.1f)
+        {
+            const auto ps = panSettings (d, u1, 0.3f);
+            CHECK (ps.angle >= -1e-5f && ps.angle <= 1.5708f + 1e-4f && ps.monoBlend >= 0.0f && ps.monoBlend <= 1.0f, "pan out of range");
+        }
     }
 }
 
@@ -940,6 +1359,11 @@ int main()
     testStrike();
     testPitchDeviation();
     testFollow();
+    testMilestone5Mapping();
+    testOnsetCapture();
+    testStereoInput();
+    testModSection();
+    testWavetable();
 
     if (failures == 0)
         std::printf ("engine tests: all checks OK\n");

@@ -8,6 +8,7 @@
 
 #pragma once
 
+#include <algorithm>
 #include <cmath>
 
 namespace ceo
@@ -173,6 +174,193 @@ inline float followSpeed (float k)
         return 0.0f;
     const float s = 0.05f * std::pow (400.0f, (a - 0.04f) / 0.96f);   // 1/20 .. 20
     return d < 0.0f ? -s : s;
+}
+
+// ---------------------------------------------------------------------------
+// Milestone 5
+// ---------------------------------------------------------------------------
+
+// Hold: about 5 ms at the bottom, 2.5 s at centre, 10 s at the top, exponential feel.
+inline float holdSeconds (float k)
+{
+    k = clamp01 (k);
+    if (k <= 0.5f)
+        return 0.005f * std::pow (2.5f / 0.005f, k / 0.5f);
+    return 2.5f * std::pow (4.0f, (k - 0.5f) / 0.5f);
+}
+
+// Sense in Stereo input mode: the level of the right-hand input, same curve as Input level
+// (the two inputs are matched when both knobs are at centre).
+inline float senseGain (float k) { return inputGain (k); }
+
+// Onset sensitivity (Sense in Mono input mode). The detector compares how much the
+// sound's spectrum has just changed with how much it has been changing lately:
+//   an onset needs  change > recent average * ratio + floor.
+// Turning Sense up lowers both numbers, so quieter and softer attacks are caught.
+struct OnsetMap
+{
+    float ratio;
+    float floorFlux;
+};
+
+inline OnsetMap onsetSensitivity (float k)
+{
+    k = clamp01 (k);
+    OnsetMap m;
+    m.ratio     = 5.0f * std::pow (0.4f, k);          // 5.0 at the bottom, 2.0 at the top
+    m.floorFlux = 30.0f * std::pow (0.02f, k);        // 30 at the bottom, 0.6 at the top
+    return m;
+}
+
+// Mod amount: centre = off. Returns -1 .. +1 (small flat spot at centre so "off" is exact).
+inline float modBipolar (float k)
+{
+    const float d = (clamp01 (k) - 0.5f) * 2.0f;
+    const float a = std::fabs (d);
+    if (a < 0.02f)
+        return 0.0f;
+    const float s = (a - 0.02f) / 0.98f;
+    return d < 0.0f ? -s : s;
+}
+
+// Mod target Hold: the Mod amount is added to the Hold knob (a full turn of Mod moves it half the knob's travel).
+inline float holdKnobWithMod (float holdKnob, float modD)
+{
+    return clamp01 (holdKnob + 0.5f * modD);
+}
+
+// Mod target Pan. Where one grain (or note) sits between left and right.
+//   Centre : spread randomly across the whole stereo field (equal power).
+//   Up     : the spread narrows to the middle (by half way), then the stereo image of the
+//            recording itself is folded down to mono (full up = fully mono).
+//   Down   : the grains are pushed out to hard left or hard right (coin toss) at the bottom.
+// u1, u2 are fresh random numbers 0..1.  angle: 0 = left, pi/2 = right.
+struct PanSettings
+{
+    float angle;
+    float monoBlend;     // 0 = keep the recording's own stereo image, 1 = fold it to mono
+};
+
+inline PanSettings panSettings (float modD, float u1, float u2)
+{
+    const float uniform = u1 * 0.5f * kPi;
+    PanSettings p { uniform, 0.0f };
+
+    if (modD < 0.0f)
+    {
+        const float coin = u2 < 0.5f ? 0.0f : 0.5f * kPi;
+        p.angle = uniform + (-modD) * (coin - uniform);
+    }
+    else if (modD > 0.0f)
+    {
+        const float narrow = std::min (1.0f, modD / 0.5f);
+        p.angle     = uniform + narrow * (0.25f * kPi - uniform);
+        p.monoBlend = modD > 0.5f ? (modD - 0.5f) / 0.5f : 0.0f;
+    }
+    return p;
+}
+
+// Mod target Reverb.
+//   Up   : reverb mixed in with the sound; longer decay as it goes up; frozen (endless) at the very top.
+//   Down : the direct sound fades out and only the reverb is heard, with a slow shimmering movement
+//          that grows as it goes down; longer decay as it goes down; frozen at the very bottom.
+struct ReverbMap
+{
+    bool  active  = false;
+    bool  freeze  = false;
+    float decay   = 1.0f;     // seconds (RT60)
+    float dry     = 1.0f;
+    float wet     = 0.0f;
+    float shimmer = 0.0f;     // 0..1
+};
+
+inline ReverbMap reverbMap (float modD)
+{
+    ReverbMap m;
+    const float a = std::fabs (modD);
+    if (a <= 0.0f)
+        return m;
+
+    m.active = true;
+    m.freeze = a > 0.97f;
+    m.decay  = 0.3f * std::pow (200.0f, std::min (a, 0.97f) / 0.97f);     // 0.3 s .. 60 s
+
+    if (modD > 0.0f)
+    {
+        m.dry = 1.0f;
+        m.wet = 0.6f * std::min (1.0f, a / 0.3f);
+    }
+    else
+    {
+        const float t = std::min (1.0f, a / 0.08f);
+        m.dry     = 1.0f - t;
+        m.wet     = 0.6f + 0.4f * t;
+        m.shimmer = a;
+    }
+    return m;
+}
+
+// Mod target Delay.
+//   Up   : echoes, 80 ms to 1 s, steady 67% feedback.
+//   Down : very short delays, 25 ms down to 1 ms, 99% feedback, giving metallic, pitched
+//          resonances (the time sets the pitch).
+struct DelayMap
+{
+    bool  active   = false;
+    bool  metallic = false;
+    float time     = 0.0f;    // seconds
+    float feedback = 0.0f;
+    float inGain   = 1.0f;    // keeps the loud 99% feedback setting from being much louder than the echoes
+    float level    = 0.0f;    // how much of the delay is added to the sound
+};
+
+inline DelayMap delayMap (float modD)
+{
+    DelayMap m;
+    const float a = std::fabs (modD);
+    if (a <= 0.0f)
+        return m;
+
+    const float fade = std::min (1.0f, a / 0.08f);     // fades in just off centre, so there is no click
+    m.active = true;
+    if (modD > 0.0f)
+    {
+        m.time     = 0.08f * std::pow (12.5f, a);       // 80 ms .. 1 s
+        m.feedback = 0.67f;
+        m.inGain   = 1.0f;
+        m.level    = 0.7f * fade;
+    }
+    else
+    {
+        m.metallic = true;
+        m.time     = 0.025f * std::pow (0.04f, a);      // 25 ms .. 1 ms
+        m.feedback = 0.99f;
+        m.inGain   = 0.35f;
+        m.level    = 1.0f * fade;
+    }
+    return m;
+}
+
+// Wavetable mode: Length fully down crossfades from grains into an oscillator.
+// Returns 1 = all oscillator (knob at the very bottom) .. 0 = all grains (knob above 6%).
+inline float wavetableMix (float lengthKnob)
+{
+    const float edge = 0.06f;
+    const float k = clamp01 (lengthKnob);
+    if (k >= edge)
+        return 0.0f;
+    const float t = k / edge;
+    return 1.0f - t * t * (3.0f - 2.0f * t);
+}
+
+// Centre pitch of the oscillator (Pitch knob at centre): C2.
+constexpr float kWavetableCentreHz = 130.8128f;
+
+// In Wavetable mode the Grain direction knob sets how quickly one wavetable melts into the next
+// (10 ms at the bottom, about 3 s at the top).
+inline float wavetableMorphSeconds (float directionKnob)
+{
+    return 0.01f * std::pow (300.0f, clamp01 (directionKnob));
 }
 
 } // namespace map

@@ -23,6 +23,9 @@ namespace CeoParams
     inline constexpr const char* erase          = "erase";          // plain button for now (every click erases the selected layer)
     inline constexpr const char* undo           = "undo";           // plain button for now (every click undoes the last record-over)
     inline constexpr const char* follow         = "follow";         // Follow mode on/off (Scan becomes a speed control)
+    inline constexpr const char* inputMode      = "inputMode";      // dropdown: Mono / Stereo
+    inline constexpr const char* onsetCapture   = "onsetCapture";   // plain button: a detected attack starts recording (Mono input only)
+    inline constexpr const char* modTarget      = "modTarget";      // dropdown: what the Mod amount knob controls
 
     // Grain knobs
     inline constexpr const char* intensity      = "intensity";

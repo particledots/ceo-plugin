@@ -47,6 +47,13 @@ juce::AudioProcessorValueTreeState::ParameterLayout createLayout()
     layout.add (button (undo,   "Undo"));
     layout.add (button (follow, "Follow mode"));
 
+    // Milestone 5 controls (plain for now; the styled panel gives them a proper place).
+    layout.add (std::make_unique<juce::AudioParameterChoice> (juce::ParameterID { inputMode, 1 },
+                                                              "Input mode", juce::StringArray { "Mono", "Stereo" }, 0));
+    layout.add (button (onsetCapture, "Onset capture"));
+    layout.add (std::make_unique<juce::AudioParameterChoice> (juce::ParameterID { modTarget, 1 },
+                                                              "Mod target", juce::StringArray { "Pan", "Hold", "Reverb", "Delay" }, 0));
+
     // Grain knobs, in panel order. Centre-detent knobs start at 0.5.
     layout.add (knob (intensity,      "Intensity",       0.5f));
     layout.add (knob (grainWindow,    "Grain window",    0.5f));
@@ -56,7 +63,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout createLayout()
     layout.add (knob (spray,          "Spray",           0.0f));
     layout.add (knob (pitch,          "Pitch",           0.5f));
     layout.add (knob (pitchDeviation, "Pitch deviation", 0.5f));
-    layout.add (knob (modAmount,      "Mod amount",      0.0f));
+    layout.add (knob (modAmount,      "Mod amount",      0.5f));
     layout.add (knob (hold,           "Hold",            0.5f));
     layout.add (knob (sense,          "Sense",           0.5f));
     layout.add (knob (dub,            "Dub",             0.5f));

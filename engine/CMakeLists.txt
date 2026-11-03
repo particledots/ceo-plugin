@@ -4,6 +4,10 @@
 add_library(ceo_engine STATIC
     src/Engine.cpp
     src/Window.cpp
+    src/Fft.cpp
+    src/OnsetDetector.cpp
+    src/Effects.cpp
+    src/Wavetable.cpp
 )
 
 target_include_directories(ceo_engine PUBLIC include)

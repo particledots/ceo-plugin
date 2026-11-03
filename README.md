@@ -3,16 +3,16 @@
 An original AU / VST3 granular effect for Logic Pro, inspired by the feel of a granular
 Eurorack module. All DSP is our own code; it is not a port or copy of anything.
 
-Status: **milestone 4 (awaiting testing in Logic).** Six layers α to ζ (10 s plus a 3 s tail
-each) and Ω, which joins all six end to end along Scan. Capture records into the selected layer
-(in Ω, the layer under the Scan knob); Dub decides how much of the old audio is kept (0 = replace,
-centre = half, full = sound on sound). Erase and Undo (one step) are plain buttons: every click
-counts. Strike fires one grain per click, 15% louder than continuous grains, even with Intensity
-at either end. Pitch deviation: random free spread one way, random whole-semitone steps the other
-way. Follow mode (a plain on/off button): Scan becomes a speed control for a playhead that moves
-through the layer by itself; Capture or Strike restarts it. Still generic sliders.
-Not yet working: Mod, Hold, Sense, onset detection, Wavetable mode, mono/stereo input choice
-(milestone 5), styled panel (6), saving recordings with the project (7).
+Status: **milestone 5 (awaiting testing in Logic).** Six layers α to ζ (10 s plus a 3 s tail
+each) and Ω; Capture, Dub, Erase, Undo, Strike, Pitch deviation and Follow mode as before. New:
+**Onset capture** (plain button, Mono input only): a detected attack starts recording into the
+selected layer; **Hold** sets how long it records and how long it ignores further attacks; **Sense**
+sets how sensitive the detector is. **Input mode** (dropdown): Mono, or Stereo (left and right
+inputs recorded as a stereo layer; Sense then sets the right-hand input level). **Mod target**
+(dropdown: Pan, Hold, Reverb, Delay) chooses what **Mod amount** does (centre = off). **Wavetable
+mode**: turn Length fully down and grains cross over into an oscillator built from the recording.
+Follow mode loop length now follows Hold. Still generic sliders.
+Not yet working: styled panel (milestone 6), saving recordings with the project (7).
 
 ## Folders
 
