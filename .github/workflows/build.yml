@@ -1,0 +1,83 @@
+name: Build Ceo
+
+# Runs automatically every time code is pushed, and can also be started by hand
+# from the Actions tab ("Run workflow").
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  engine-test:
+    name: Engine self-test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and run the engine test
+        run: |
+          cmake -S . -B build-test -DCEO_BUILD_PLUGIN=OFF -DCMAKE_BUILD_TYPE=Release
+          cmake --build build-test -j 4
+          ctest --test-dir build-test --output-on-failure
+
+  build-macos:
+    name: Build AU + VST3 (macOS)
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build AU and VST3
+        run: cmake --build build --config Release --target Ceo_AU Ceo_VST3 -j 4
+
+      - name: Locate the built plugins
+        id: find
+        run: |
+          AU=$(find build -type d -name "Ceo.component" | head -n 1)
+          VST3=$(find build -type d -name "Ceo.vst3" | head -n 1)
+          echo "AU:   $AU"
+          echo "VST3: $VST3"
+          test -n "$AU"   || { echo "AU bundle not found";   exit 1; }
+          test -n "$VST3" || { echo "VST3 bundle not found"; exit 1; }
+          echo "au=$AU"     >> "$GITHUB_OUTPUT"
+          echo "vst3=$VST3" >> "$GITHUB_OUTPUT"
+
+      - name: Check the build is universal (Apple Silicon + Intel)
+        run: |
+          lipo -archs "${{ steps.find.outputs.au }}/Contents/MacOS/Ceo"
+          lipo -archs "${{ steps.find.outputs.vst3 }}/Contents/MacOS/Ceo"
+
+      - name: Sign (ad-hoc, so Apple Silicon Macs will load it)
+        run: |
+          codesign --force --deep --sign - "${{ steps.find.outputs.au }}"
+          codesign --force --deep --sign - "${{ steps.find.outputs.vst3 }}"
+          codesign --verify --deep --strict --verbose=2 "${{ steps.find.outputs.au }}"
+          codesign --verify --deep --strict --verbose=2 "${{ steps.find.outputs.vst3 }}"
+
+      - name: Apple's AU validator (auval)
+        continue-on-error: true
+        run: |
+          mkdir -p "$HOME/Library/Audio/Plug-Ins/Components"
+          cp -R "${{ steps.find.outputs.au }}" "$HOME/Library/Audio/Plug-Ins/Components/"
+          killall -9 AudioComponentRegistrar 2>/dev/null || true
+          sleep 3
+          auval -v aufx Ceo1 Pdot 2>&1 | tee auval.log
+
+      - name: Package
+        run: |
+          mkdir -p dist
+          ditto -c -k --keepParent "${{ steps.find.outputs.au }}"   dist/Ceo-AU.zip
+          ditto -c -k --keepParent "${{ steps.find.outputs.vst3 }}" dist/Ceo-VST3.zip
+          cp auval.log dist/auval.log 2>/dev/null || true
+          ls -l dist
+
+      - name: Upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: Ceo-macOS
+          path: dist/*
+          if-no-files-found: error
