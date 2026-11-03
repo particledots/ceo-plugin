@@ -24,7 +24,7 @@ jobs:
 
   build-macos:
     name: Build AU + VST3 (macOS)
-    runs-on: macos-14
+    runs-on: macos-26     # Apple silicon runner; macos-14 is retired by GitHub on 2 Nov 2026
     steps:
       - uses: actions/checkout@v4
 
@@ -69,15 +69,29 @@ jobs:
 
       - name: Package
         run: |
-          mkdir -p dist
-          ditto -c -k --keepParent "${{ steps.find.outputs.au }}"   dist/Ceo-AU.zip
-          ditto -c -k --keepParent "${{ steps.find.outputs.vst3 }}" dist/Ceo-VST3.zip
-          cp auval.log dist/auval.log 2>/dev/null || true
-          ls -l dist
+          mkdir -p Ceo-macOS
+          cp -R "${{ steps.find.outputs.au }}"   Ceo-macOS/
+          cp -R "${{ steps.find.outputs.vst3 }}" Ceo-macOS/
+          cp auval.log Ceo-macOS/auval.log 2>/dev/null || true
+          cat > Ceo-macOS/INSTALL.txt <<'TXT'
+          1. Unzip.
+          2. Open Terminal and run:   xattr -dr com.apple.quarantine ~/Downloads/Ceo-macOS/*
+             (adjust the path if you unzipped elsewhere; this clears the "downloaded from internet" block)
+          3. Copy "Ceo.component" to  ~/Library/Audio/Plug-Ins/Components/
+             Copy "Ceo.vst3"       to  ~/Library/Audio/Plug-Ins/VST3/
+          4. In Logic: Settings > Plug-in Manager > rescan. Look for "particledots: Ceo" (an audio effect).
+          TXT
+          # Easy installer for Logic (double-click; same file in every plugin)
+          cp tools/install/Install-Unofficial-Plugin.command Ceo-macOS/
+          chmod +x Ceo-macOS/Install-Unofficial-Plugin.command
+          printf '\nEASY INSTALL (Logic, Audio Unit): double-click Install-Unofficial-Plugin.command in this folder. It asks for your Mac password once.\n' >> Ceo-macOS/INSTALL.txt
+          [ -x Ceo-macOS/Install-Unofficial-Plugin.command ] || { echo "::error::PACKAGE missing Install-Unofficial-Plugin.command"; exit 1; }
+          ditto -c -k --keepParent Ceo-macOS Ceo-macOS.zip
+          ls -l Ceo-macOS Ceo-macOS.zip
 
       - name: Upload
         uses: actions/upload-artifact@v4
         with:
           name: Ceo-macOS
-          path: dist/*
+          path: Ceo-macOS.zip
           if-no-files-found: error

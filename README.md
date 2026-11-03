@@ -21,15 +21,20 @@ Nothing in `engine/` knows about sliders or Logic.
 ## Getting the plugin
 
 1. Open the **Actions** tab of this repo and click the latest **Build Ceo** run.
-2. At the bottom, under **Artifacts**, download **Ceo-macOS** and unzip it.
-3. Inside are `Ceo-AU.zip`, `Ceo-VST3.zip` and `auval.log`. Unzip the plugin zips.
-4. Put `Ceo.component` in `~/Library/Audio/Plug-Ins/Components/` and (optional) `Ceo.vst3` in
-   `~/Library/Audio/Plug-Ins/VST3/`.
-5. In Terminal, once, remove the download quarantine flag:
-   `xattr -cr ~/Library/Audio/Plug-Ins/Components/Ceo.component`
+2. At the bottom, under **Artifacts**, download **Ceo-macOS** and unzip it (twice: the download is a zip containing `Ceo-macOS.zip`).
+3. Inside the `Ceo-macOS` folder are `Ceo.component`, `Ceo.vst3`, `INSTALL.txt`, `auval.log` and
+   `Install-Unofficial-Plugin.command`.
+4. In Terminal, once, clear the download block: `xattr -dr com.apple.quarantine ~/Downloads/Ceo-macOS/*`
+   (adjust the path if you unzipped elsewhere).
+5. **Easy install (Logic, Audio Unit):** double-click `Install-Unofficial-Plugin.command`. It asks for your Mac
+   password once, installs the AU for all users and restarts the AU registrar.
+   Or by hand: copy `Ceo.component` to `~/Library/Audio/Plug-Ins/Components/` and `Ceo.vst3` to `~/Library/Audio/Plug-Ins/VST3/`.
 6. Restart Logic. If it was already scanned, Logic Pro > Settings > Plug-In Manager > Reset & Rescan Selection.
 
 The plugin appears under **Audio Units > particledots > Ceo**.
+
+`tools/install/Install-Unofficial-Plugin.command` is the same generic installer used in the other plugins.
+Do not edit it here; it finds any `.component` next to it, so it needs no changes.
 
 ## Notes
 
