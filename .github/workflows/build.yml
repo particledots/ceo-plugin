@@ -65,7 +65,16 @@ jobs:
           cp -R "${{ steps.find.outputs.au }}" "$HOME/Library/Audio/Plug-Ins/Components/"
           killall -9 AudioComponentRegistrar 2>/dev/null || true
           sleep 3
-          auval -v aufx Ceo1 Pdot 2>&1 | tee auval.log
+          auval -v aufx Ceo1 Pdot > auval.log 2>&1; code=$?
+          tail -n 20 auval.log
+          # Result is also written as annotations (shown on the run page and readable through the API).
+          if grep -q "AU VALIDATION SUCCEEDED" auval.log; then
+            echo "::notice::AUVAL: AU VALIDATION SUCCEEDED"
+          else
+            echo "::error::AUVAL: did not succeed (auval exit code $code)"
+            grep -iE "fail|error|cannot|not found" auval.log | head -8 | while IFS= read -r line; do echo "::error::AUVAL: $line"; done
+            exit 1
+          fi
 
       - name: Package
         run: |
@@ -88,6 +97,9 @@ jobs:
           [ -x Ceo-macOS/Install-Unofficial-Plugin.command ] || { echo "::error::PACKAGE missing Install-Unofficial-Plugin.command"; exit 1; }
           ditto -c -k --keepParent Ceo-macOS Ceo-macOS.zip
           ls -l Ceo-macOS Ceo-macOS.zip
+          # Package contents are also written as annotations (readable through the API).
+          echo "::notice::PACKAGE archs: $(lipo -archs Ceo-macOS/Ceo.component/Contents/MacOS/Ceo)"
+          unzip -Z Ceo-macOS.zip | grep -E "Install-Unofficial|INSTALL.txt|auval.log|Contents/MacOS/Ceo$" | while IFS= read -r line; do echo "::notice::ZIP: $line"; done
 
       - name: Upload
         uses: actions/upload-artifact@v4
