@@ -20,6 +20,9 @@ namespace CeoParams
     inline constexpr const char* capture        = "capture";
     inline constexpr const char* layer          = "layer";
     inline constexpr const char* strike         = "strike";
+    inline constexpr const char* erase          = "erase";          // plain button for now (every click erases the selected layer)
+    inline constexpr const char* undo           = "undo";           // plain button for now (every click undoes the last record-over)
+    inline constexpr const char* follow         = "follow";         // Follow mode on/off (Scan becomes a speed control)
 
     // Grain knobs
     inline constexpr const char* intensity      = "intensity";

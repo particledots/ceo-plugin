@@ -42,6 +42,11 @@ juce::AudioProcessorValueTreeState::ParameterLayout createLayout()
 
     layout.add (button (strike, "Strike"));
 
+    // Plain buttons for now; the styled panel (milestone 6) gives them a proper place.
+    layout.add (button (erase,  "Erase"));
+    layout.add (button (undo,   "Undo"));
+    layout.add (button (follow, "Follow mode"));
+
     // Grain knobs, in panel order. Centre-detent knobs start at 0.5.
     layout.add (knob (intensity,      "Intensity",       0.5f));
     layout.add (knob (grainWindow,    "Grain window",    0.5f));

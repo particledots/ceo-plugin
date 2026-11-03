@@ -121,5 +121,59 @@ inline float reverseProbability (float k)
     return clamp01 (k);
 }
 
+// Strike grains are a little louder than continuous grains so they work as accents.
+constexpr float kStrikeGain = 1.15f;
+
+// Dub: how much of the old layer audio is kept when recording over it.
+// 0 = none (replace), centre = half level, full = full level (sound on sound).
+// Small flat spots at both ends so "replace" and "full" are exact.
+inline float dubGain (float k)
+{
+    k = clamp01 (k);
+    if (k < 0.02f)
+        return 0.0f;
+    if (k > 0.98f)
+        return 1.0f;
+    return k;
+}
+
+// Pitch deviation: a random pitch offset (in semitones) for one grain.
+// 'u' is a fresh random number from 0.0 (inclusive) to 1.0 (exclusive).
+//   Centre            : none.
+//   Turned down       : free (unquantised) random offset, up to plus or minus 12 semitones at the bottom.
+//   Turned up         : random offset in whole semitone steps; the reach grows from
+//                       plus or minus 1 semitone just above centre to plus or minus 12 at the top.
+inline float pitchDeviationSemitones (float k, float u)
+{
+    const float d = (clamp01 (k) - 0.5f) * 2.0f;      // -1 .. +1
+    const float a = std::fabs (d);
+    if (a < 0.02f)
+        return 0.0f;
+
+    const float amount = (a - 0.02f) / 0.98f;         // 0 .. 1
+
+    if (d < 0.0f)
+        return (2.0f * u - 1.0f) * 12.0f * amount;
+
+    const int reach = 1 + (int) (amount * 11.999f);   // 1 .. 12
+    int step = (int) (u * (float) (2 * reach + 1));
+    if (step > 2 * reach)
+        step = 2 * reach;
+    return (float) (step - reach);
+}
+
+// Follow mode: the Scan knob becomes a speed control for the playhead.
+// Samples of layer passed per output sample: 0 (stalled) in a small flat spot at centre,
+// then from 1/20 speed up to 20x speed, exponential. Above centre = forwards, below = backwards.
+inline float followSpeed (float k)
+{
+    const float d = (clamp01 (k) - 0.5f) * 2.0f;      // -1 .. +1
+    const float a = std::fabs (d);
+    if (a < 0.04f)
+        return 0.0f;
+    const float s = 0.05f * std::pow (400.0f, (a - 0.04f) / 0.96f);   // 1/20 .. 20
+    return d < 0.0f ? -s : s;
+}
+
 } // namespace map
 } // namespace ceo
