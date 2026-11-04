@@ -1,9 +1,16 @@
-# Ceò (working build name: Ceo)
+# Ceo
 
 An original AU / VST3 granular effect for Logic Pro, inspired by the feel of a granular
 Eurorack module. All DSP is our own code; it is not a port or copy of anything.
 
-Status: **milestone 8 (awaiting testing in Logic).** New: two menus under the Pitch controls.
+Status: **milestone 9 (polish, awaiting testing in Logic).** The panel title now reads "Ceo" (the plugin's name in Logic was
+already "Ceo"; its internal name, codes and bundle id are unchanged, so saved projects still find it). The CPU use of the
+engine was measured in worst cases (all six layers, longest grains, spray, maximum reverb, Strike spam, 88 grains):
+about 12% of one core on average and at most about a third of a block's time for the worst single block, so the engine
+was left exactly as it was. The build now also runs pluginval on the AU and the VST3 (results are in the package as
+`pluginval-AU.log` and `pluginval-VST3.log`).
+
+Milestone 8 (tested): **Pitch Snap** and **Pitch Scale**.
 
 - **Pitch Snap** (menu under **Pitch**: Off / Steps / Semitones). Steps makes the knob land on octaves and fifths:
   the list is 0, 7, 12, 19, 24, 31, 36, 43, 48 semitones up and down, but this knob only travels +-24, so only
@@ -25,7 +32,7 @@ Earlier milestones: the styled panel (milestones 6 and 7: squarer layout, round 
 switching itself off when the layer is full), six layers α to ζ (10 s plus a 3 s tail each) and Ω; Capture, Dub,
 Erase, Undo, Strike, Pitch deviation, Follow mode, Onset capture with Hold and Sense, Mono/Stereo input, the Mod
 section (Pan, Hold, Reverb, Delay) and Wavetable mode.
-Not yet working: saving recordings with the project and loading your own audio (milestone 9).
+Not yet working: saving recordings with the project (milestone 10) and loading your own audio (milestone 11).
 
 ## Folders
 

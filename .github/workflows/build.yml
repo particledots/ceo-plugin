@@ -105,12 +105,40 @@ jobs:
             exit 1
           fi
 
+      # pluginval (Tracktion's open-source plugin validator) checks the AU and the VST3 the way hosts use them: loading,
+      # parameters, saving and restoring state, different buffer sizes and sample rates. It never fails the build;
+      # its verdict is written as annotations and as logs inside the package.
+      - name: pluginval (AU and VST3)
+        continue-on-error: true
+        timeout-minutes: 20
+        run: |
+          set +e
+          curl -sSL -o pluginval.zip https://github.com/Tracktion/pluginval/releases/latest/download/pluginval_macOS.zip
+          unzip -q -o pluginval.zip -d pluginval-bin
+          PV="$(find pluginval-bin -type f -name pluginval -perm -u+x | head -n 1)"
+          echo "pluginval binary: $PV"
+          test -n "$PV" || { echo "::warning::PLUGINVAL: could not download pluginval"; exit 0; }
+          "$PV" --version 2>&1 | head -n 1 | while IFS= read -r line; do echo "::notice::PLUGINVAL version: $line"; done
+          for kind in AU VST3; do
+            if [ "$kind" = "AU" ]; then TARGET="$HOME/Library/Audio/Plug-Ins/Components/Ceo.component"; else TARGET="${{ steps.find.outputs.vst3 }}"; fi
+            "$PV" --strictness-level 5 "$TARGET" > "pluginval-$kind.log" 2>&1; code=$?
+            tail -n 25 "pluginval-$kind.log"
+            if [ $code -eq 0 ]; then
+              echo "::notice::PLUGINVAL $kind: passed at strictness level 5"
+            else
+              echo "::error::PLUGINVAL $kind: failed (exit code $code)"
+              grep -iE "fail|error|crash|assert" "pluginval-$kind.log" | head -12 | while IFS= read -r line; do echo "::error::PLUGINVAL $kind: $line"; done
+            fi
+          done
+          exit 0
+
       - name: Package
         run: |
           mkdir -p Ceo-macOS
           cp -R "${{ steps.find.outputs.au }}"   Ceo-macOS/
           cp -R "${{ steps.find.outputs.vst3 }}" Ceo-macOS/
           cp auval.log Ceo-macOS/auval.log 2>/dev/null || true
+          cp pluginval-AU.log pluginval-VST3.log Ceo-macOS/ 2>/dev/null || true
           cat > Ceo-macOS/INSTALL.txt <<'TXT'
           1. Unzip.
           2. Open Terminal and run:   xattr -dr com.apple.quarantine ~/Downloads/Ceo-macOS/*

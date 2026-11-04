@@ -214,10 +214,10 @@ void CeoPanel::paint (juce::Graphics& g)
     g.setColour (border());
     g.drawRoundedRectangle (bounds.reduced (0.5f), 10.0f, 1.0f);
 
-    // Title "Ceò"
+    // Title "Ceo"
     g.setColour (title());
     g.setFont (font (24.0f, true));
-    g.drawText (juce::String::fromUTF8 ("Ce\xc3\xb2"), juce::Rectangle<int> (0, 10, kWidth, 32), juce::Justification::centred, false);
+    g.drawText (juce::String ("Ceo"), juce::Rectangle<int> (0, 10, kWidth, 32), juce::Justification::centred, false);
 
     // Knob labels
     g.setColour (lettering());
