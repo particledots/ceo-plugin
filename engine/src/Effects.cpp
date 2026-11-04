@@ -96,7 +96,9 @@ void Reverb::set (float decaySeconds, bool freeze, float shimmer)
         // Each trip round a loop of N samples should lose 60 dB per 'decaySeconds'.
         l.gainTarget = freeze ? 1.0f : std::pow (10.0f, -3.0f * (float) l.length / (decaySeconds * (float) sr));
     }
-    inGainTarget = freeze ? 0.0f : 1.0f;
+    // A longer decay stores more energy from a steady sound (the level grows with the square root of the
+    // decay time), so the input is turned down to match: the reverb stays about as loud at 60 s as at 0.6 s.
+    inGainTarget = freeze ? 0.0f : std::min (1.0f, std::sqrt (0.6f / decaySeconds));
     dampTarget   = freeze ? 1.0f : normalDamp;       // frozen: nothing is filtered away, so the tail never fades
     modTarget    = std::max (0.0f, std::min (1.0f, shimmer)) * 48.0f * (float) (sr / 48000.0);
 }

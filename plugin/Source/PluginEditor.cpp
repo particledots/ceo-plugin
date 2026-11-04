@@ -15,7 +15,7 @@ namespace
 //   row 0: Input level / Dry/wet / Output level    y 52
 //   Capture (+ Onset) / layer dial / Strike (+ Erase, Undo)   y 144 to 294
 //   stream display                                y 304 to 400
-//   direction lights above Grain direction        y 413
+//   direction lights under Grain direction        y 506-526
 //   rows 1..4 of three knobs, 118 apart           from y 424
 //   Follow under Scan, Mod target under Mod amount, Input mode under Sense
 //==============================================================================
@@ -140,7 +140,7 @@ juce::Rectangle<int> CeoPanel::knobBounds (const KnobCell& cell) const
 juce::Rectangle<int> CeoPanel::ledArea() const
 {
     const int cx = columnCentre (2);
-    return { cx - 40, 403, 80, 20 };
+    return { cx - 40, rowTop (1) + kExtraTop, 80, 20 };       // under the Grain direction label, clear of the value bubble
 }
 
 void CeoPanel::resized()
@@ -194,7 +194,7 @@ void CeoPanel::paint (juce::Graphics& g)
                     juce::Rectangle<int> (columnCentre (cell->column) - kCellWidth / 2, rowTop (cell->row) + kLabelGap, kCellWidth, kLabelHeight),
                     juce::Justification::centred, false);
 
-    // The two direction lights above Grain direction: backwards on the left, forwards on the right.
+    // The two direction lights under Grain direction: backwards on the left, forwards on the right.
     const auto leds = ledArea();
     const float forward = display.forwardActivity();
     const float reverse = display.reverseActivity();

@@ -646,6 +646,13 @@ static void testDubUndoErase()
         CHECK (! e.layerHasContent (0), "Erase empties the layer");
         auto out = process (e, p, silence (1.0)).L;
         CHECK (rms (out, (size_t) (0.5 * kSr), out.size()) == 0.0f, "silent after Erase");
+        CHECK (e.undoLayer() == 0, "Erase of a layer with sound can be undone");
+        click (e, p, p.undo);
+        CHECK (e.layerHasContent (0), "Undo brings the erased layer back");
+        CHECK (hear (220.0, 880.0), "after Erase and Undo: the sound is back");
+        click (e, p, p.erase);
+        click (e, p, p.erase);
+        CHECK (! e.layerHasContent (0) && e.undoLayer() == 0, "Erasing an empty layer keeps the earlier copy");
     }
 
     // Erase and Undo act on the selected layer only.
@@ -1349,6 +1356,29 @@ static void testMilestone5Mapping()
 // playing (grains, the oscillator, reverb and echo tails) must carry on without an audible jump.
 // The test restarts several times in the middle of a steady sound and compares the jump across the
 // restart with the largest ordinary step between neighbouring samples just before it.
+// The reverb must not get louder (and start to distort) as the decay is lengthened with Mod amount.
+static void testReverbLevelStaysEven()
+{
+    float level[3];
+    const float amts[3] = { 0.6f, 0.75f, 0.95f };
+    for (int k = 0; k < 3; ++k)
+    {
+        ceo::Engine e;
+        e.prepare (kSr, kBlock, 2);
+        record (e, sine (4.0, 220.0, 0.4f));
+        ceo::Params p;
+        p.dryWet = 1.0f; p.length = 0.5f; p.intensity = 0.8f; p.spray = 0.3f; p.scan = 0.3f;
+        p.modTarget = ceo::kModReverb; p.modAmount = amts[k];
+        auto out = process (e, p, silence (16.0));
+        level[k] = rms (out.L, (size_t) (8.0 * kSr), out.L.size());
+        float peak = 0.0f;
+        for (size_t i = (size_t) (8.0 * kSr); i < out.L.size(); ++i)
+            peak = std::max (peak, std::fabs (out.L[i]));
+        CHECK (peak <= 1.0f, "reverb output stays within +-1 at Mod %f (peak %f)", amts[k], peak);
+    }
+    CHECK (level[2] < 1.4f * level[0] && level[1] < 1.4f * level[0], "reverb level stays even with Mod (%f %f %f)", level[0], level[1], level[2]);
+}
+
 static void testRestartIsGentle()
 {
     for (int variant = 0; variant < 4; ++variant)
@@ -1579,6 +1609,7 @@ int main()
     testResetKeepsRecording();
     testLayersAndOmega();
     testDubUndoErase();
+    testReverbLevelStaysEven();
     testStrike();
     testPitchDeviation();
     testFollow();

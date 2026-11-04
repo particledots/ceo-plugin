@@ -586,12 +586,19 @@ void Engine::process (float* const* channels, int numChannels, int numSamples)
     if (params.erase != s.prevErase && ! s.recording)
     {
         const int target = currentLayer();
+        if (s.has[target])
+        {
+            // Keep a copy so Undo can bring the layer back (one step, same slot as record-over).
+            std::copy (s.plane (target, 0), s.plane (target, 0) + s.totalSamples, s.undoPlanes.begin());
+            if (s.layerStereo[target])
+                std::copy (s.plane (target, 1), s.plane (target, 1) + s.totalSamples, s.undoPlanes.begin() + s.totalSamples);
+            s.undoStereo     = s.layerStereo[target];
+            s.undoLayerIndex = target;
+        }
         float* d = s.plane (target, 0);
         std::fill (d, d + s.totalSamples, 0.0f);
         s.has[target]         = false;
         s.layerStereo[target] = false;
-        if (s.undoLayerIndex == target)
-            s.undoLayerIndex = -1;
         ++s.rev;
     }
 
@@ -784,7 +791,8 @@ void Engine::process (float* const* channels, int numChannels, int numSamples)
         g->window.set (params.grainWindow, lenSeconds);
 
         const float amp   = strike ? map::kStrikeGain : (inten.sync ? 1.0f : randomLevel);
-        const float base  = amp * g->window.loudnessCompensation() / std::sqrt (std::max (1.0f, inten.grains));
+        // A Strike is an accent: it is not turned down for a dense texture, so it stands out of it.
+        const float base  = amp * g->window.loudnessCompensation() / (strike ? 1.0f : std::sqrt (std::max (1.0f, inten.grains)));
         g->gainL = base * std::cos (pan.angle);
         g->gainR = base * std::sin (pan.angle);
 
@@ -1140,8 +1148,8 @@ void Engine::process (float* const* channels, int numChannels, int numSamples)
             s.revWet += (revWetTarget - s.revWet) * fxCoef;
             float rl, rr;
             s.reverb.process (mixL, mixR, rl, rr);
-            outL = s.revDry * mixL + s.revWet * map::softSat (rl);
-            outR = s.revDry * mixR + s.revWet * map::softSat (rr);
+            outL = map::softSat (s.revDry * mixL + s.revWet * map::softSat (rl));
+            outR = map::softSat (s.revDry * mixR + s.revWet * map::softSat (rr));
             s.revRunning = true;
         }
         if (dlyRun)
