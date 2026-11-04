@@ -50,7 +50,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout createLayout()
 
     // Milestone 5 controls (plain for now; the styled panel gives them a proper place).
     layout.add (std::make_unique<juce::AudioParameterChoice> (juce::ParameterID { inputMode, 1 },
-                                                              "Input mode", juce::StringArray { "Mono", "Stereo" }, 0));
+                                                              "Input mode", juce::StringArray { "Mono", "Stereo" }, 1));   // default Stereo (changed in 0.9.1; saved projects keep their own setting)
     layout.add (button (onsetCapture, "Onset capture"));
     layout.add (std::make_unique<juce::AudioParameterChoice> (juce::ParameterID { modTarget, 1 },
                                                               "Mod target", juce::StringArray { "Pan", "Hold", "Reverb", "Delay" }, 0));

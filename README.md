@@ -10,6 +10,9 @@ about 12% of one core on average and at most about a third of a block's time for
 was left exactly as it was. The build now also runs pluginval on the AU and the VST3 (results are in the package as
 `pluginval-AU.log` and `pluginval-VST3.log`).
 
+Version 0.9.1: the Input mode menu (under Sense) now starts on **Stereo** for a new plugin. Projects saved earlier keep the
+mode they were saved with. On a mono track the plugin still behaves as Mono. Onset capture works in Mono mode only.
+
 Milestone 8 (tested): **Pitch Snap** and **Pitch Scale**.
 
 - **Pitch Snap** (menu under **Pitch**: Off / Steps / Semitones). Steps makes the knob land on octaves and fifths:
