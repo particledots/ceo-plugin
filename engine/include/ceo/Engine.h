@@ -104,6 +104,11 @@ public:
     // Goes up whenever recorded audio changes (recording, Erase, Undo).
     uint32_t recordingRevision() const;
 
+    // Goes up each time a recording started with the Capture switch ends by itself because the layer is full
+    // (not when the switch is turned off, and not for onset recordings). The plugin watches it to turn the
+    // Capture switch off again.
+    uint32_t captureRanOutCount() const;
+
     // Grain starts since 'cursor' (pass 0 the first time; it is updated), oldest first. The engine remembers
     // the last 128; if more happened since the last call, or more than maxCount, the oldest are skipped.
     // Returns how many were written to 'out'.

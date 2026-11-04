@@ -24,9 +24,11 @@ namespace
 {
     // Where the seven indicators sit, in degrees from 12 o'clock, clockwise.
     constexpr float kAngles[7] = { -135.0f, -90.0f, -45.0f, 0.0f, 45.0f, 90.0f, 135.0f };
-    constexpr float kDialRadius      = 30.0f;
-    constexpr float kIndicatorRadius = 46.0f;
-    constexpr float kLetterRadius    = 62.0f;
+    constexpr float kS               = LayerDial::kScale;
+    constexpr float kK               = 1.0f + (kS - 1.0f) * 0.5f;      // dots, strokes and letters grow a little less than the dial
+    constexpr float kDialRadius      = 30.0f * kS;
+    constexpr float kIndicatorRadius = 46.0f * kS;
+    constexpr float kLetterRadius    = 62.0f * kS;
 }
 
 LayerDial::LayerDial (juce::RangedAudioParameter& layerParameter)
@@ -55,38 +57,38 @@ void LayerDial::paint (juce::Graphics& g)
     g.setColour (knobFill());
     g.fillEllipse (c.x - kDialRadius, c.y - kDialRadius, kDialRadius * 2.0f, kDialRadius * 2.0f);
     g.setColour (goldRim());
-    g.drawEllipse (c.x - kDialRadius, c.y - kDialRadius, kDialRadius * 2.0f, kDialRadius * 2.0f, 1.3f);
+    g.drawEllipse (c.x - kDialRadius, c.y - kDialRadius, kDialRadius * 2.0f, kDialRadius * 2.0f, 1.5f);
 
     const float a = juce::degreesToRadians (kAngles[current]);
     juce::Path pointer;
     pointer.startNewSubPath (c);
-    pointer.lineTo (c.x + 18.0f * std::sin (a), c.y - 18.0f * std::cos (a));
+    pointer.lineTo (c.x + 18.0f * kS * std::sin (a), c.y - 18.0f * kS * std::cos (a));
     g.setColour (goldPointer());
-    g.strokePath (pointer, juce::PathStrokeType (2.5f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+    g.strokePath (pointer, juce::PathStrokeType (2.5f * kK, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
 
     // The seven indicators and their letters.
     for (int i = 0; i < 7; ++i)
     {
         const float ang = juce::degreesToRadians (kAngles[i]);
         const float s = std::sin (ang), co = -std::cos (ang);
-        const float r = (i == current) ? 8.0f : 6.0f;
+        const float r = ((i == current) ? 8.0f : 6.0f) * kK;
         const juce::Point<float> p (c.x + kIndicatorRadius * s, c.y + kIndicatorRadius * co);
 
         g.setColour (layerColour (i));
         g.fillEllipse (p.x - r, p.y - r, r * 2.0f, r * 2.0f);
         g.setColour (i == current ? selectedRing() : background());
-        g.drawEllipse (p.x - r, p.y - r, r * 2.0f, r * 2.0f, 1.5f);
+        g.drawEllipse (p.x - r, p.y - r, r * 2.0f, r * 2.0f, 1.5f * kK);
 
         g.setColour (lettering());
-        g.setFont (font (13.0f));
+        g.setFont (font (13.0f * kK * 1.05f));
         g.drawText (layerName (i),
-                    juce::Rectangle<float> (20.0f, 16.0f).withCentre ({ c.x + kLetterRadius * s, c.y + kLetterRadius * co }),
+                    juce::Rectangle<float> (30.0f, 24.0f).withCentre ({ c.x + kLetterRadius * s, c.y + kLetterRadius * co }),
                     juce::Justification::centred, false);
     }
 
     g.setColour (lettering());
-    g.setFont (font (12.5f));
-    g.drawText ("Layer", juce::Rectangle<float> (0.0f, c.y + kLetterRadius + 2.0f, (float) getWidth(), 16.0f),
+    g.setFont (font (12.5f * kK));
+    g.drawText ("Layer", juce::Rectangle<float> (0.0f, c.y + kLetterRadius + 3.0f, (float) getWidth(), 24.0f),
                 juce::Justification::centred, false);
 }
 
@@ -95,7 +97,7 @@ void LayerDial::pickFromMouse (const juce::MouseEvent& e)
     const auto c = dialCentre();
     const float dx = e.position.x - c.x;
     const float dy = e.position.y - c.y;
-    if (dx * dx + dy * dy < 100.0f)
+    if (dx * dx + dy * dy < (10.0f * kS) * (10.0f * kS))
         return;                                         // too close to the middle to tell which way
 
     const float degrees = juce::radiansToDegrees (std::atan2 (dx, -dy));   // 0 = up, clockwise positive

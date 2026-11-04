@@ -259,6 +259,17 @@ static void testRecording()
     CHECK (e.isRecording(), "still recording at 12.5 s");
     process (e, p, silence (0.7));
     CHECK (! e.isRecording(), "must stop by itself after 13 s");
+    CHECK (e.captureRanOutCount() == 1, "running out of room is reported once (%u)", (unsigned) e.captureRanOutCount());
+    process (e, p, silence (0.5));
+    CHECK (e.captureRanOutCount() == 1, "and not reported again while the switch stays on (%u)", (unsigned) e.captureRanOutCount());
+    p.capture = false;
+    process (e, p, silence (0.05));
+    CHECK (e.captureRanOutCount() == 1, "switching Capture off does not count as running out (%u)", (unsigned) e.captureRanOutCount());
+    p.capture = true;
+    process (e, p, sine (0.2, 440.0, 0.5f));
+    p.capture = false;
+    process (e, p, silence (0.05));
+    CHECK (e.captureRanOutCount() == 1, "a short recording stopped by hand is not reported (%u)", (unsigned) e.captureRanOutCount());
 
     // Recording goes into whichever layer the dial points at.
     ceo::Engine e2;
@@ -1039,6 +1050,7 @@ static void testOnsetCapture()
         p.dryWet = 0.0f; p.onsetCapture = true; p.sense = 0.6f; p.hold = 0.15f;
         process (e, p, bursts (4.0, { 0.3, 1.2, 2.2, 3.1 }, 0.5f));
         CHECK (e.onsetCount() == 4, "four separate bursts = four onsets (count %d)", e.onsetCount());
+        CHECK (e.captureRanOutCount() == 0, "onset recordings ending do not count as the Capture switch running out (%u)", (unsigned) e.captureRanOutCount());
     }
 
     {   // Stereo input mode: off.

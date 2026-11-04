@@ -9,9 +9,33 @@ CeoAudioProcessor::CeoAudioProcessor()
 {
 }
 
+CeoAudioProcessor::~CeoAudioProcessor()
+{
+    cancelPendingUpdate();
+}
+
 void CeoAudioProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
 {
     engine.prepare (sampleRate, samplesPerBlock, getTotalNumInputChannels());
+    seenCaptureRanOut = engine.captureRanOutCount();
+}
+
+// A Capture recording stops by itself when the layer is full (13 s). The engine then reports it, and here the
+// Capture button is switched off to match, so the next click starts a new recording.
+void CeoAudioProcessor::handleAsyncUpdate()
+{
+    if (engine.isRecording())
+        return;                                 // a new recording has already started: leave the button alone
+
+    if (auto* capture = apvts.getParameter (CeoParams::capture))
+    {
+        if (capture->getValue() > 0.5f)
+        {
+            capture->beginChangeGesture();
+            capture->setValueNotifyingHost (0.0f);
+            capture->endChangeGesture();
+        }
+    }
 }
 
 bool CeoAudioProcessor::isBusesLayoutSupported (const BusesLayout& layouts) const
@@ -68,6 +92,13 @@ void CeoAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mi
 
     engine.setParams (readParams());
     engine.process (buffer.getArrayOfWritePointers(), buffer.getNumChannels(), buffer.getNumSamples());
+
+    const uint32_t ranOut = engine.captureRanOutCount();
+    if (ranOut != seenCaptureRanOut)
+    {
+        seenCaptureRanOut = ranOut;
+        triggerAsyncUpdate();
+    }
 }
 
 juce::AudioProcessorEditor* CeoAudioProcessor::createEditor()

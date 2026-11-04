@@ -32,11 +32,13 @@ public:
     void mouseUp (const juce::MouseEvent&) override;
     void mouseWheelMove (const juce::MouseEvent&, const juce::MouseWheelDetails&) override;
 
-    static constexpr int kWidth  = 150;
-    static constexpr int kHeight = 160;
+    // Everything is drawn at kScale times the size of the original portrait panel's dial.
+    static constexpr float kScale  = 2.0f;
+    static constexpr int   kWidth  = 280;
+    static constexpr int   kHeight = 296;
 
 private:
-    juce::Point<float> dialCentre() const { return { (float) getWidth() * 0.5f, 74.0f }; }
+    juce::Point<float> dialCentre() const { return { (float) getWidth() * 0.5f, 70.0f * kScale }; }
     void pickFromMouse (const juce::MouseEvent&);
     void step (int direction);
 

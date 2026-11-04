@@ -7,11 +7,12 @@
 #include <ceo/Engine.h>
 #include "Parameters.h"
 
-class CeoAudioProcessor : public juce::AudioProcessor
+class CeoAudioProcessor : public juce::AudioProcessor,
+                          private juce::AsyncUpdater
 {
 public:
     CeoAudioProcessor();
-    ~CeoAudioProcessor() override = default;
+    ~CeoAudioProcessor() override;
 
     void prepareToPlay (double sampleRate, int samplesPerBlock) override;
     void releaseResources() override {}
@@ -41,10 +42,14 @@ public:
     const ceo::Engine& getEngine() const { return engine; }
 
 private:
+    // Called on the main thread after a Capture recording filled its layer: switches the Capture button off.
+    void handleAsyncUpdate() override;
+
     ceo::Params readParams() const;
 
     juce::AudioProcessorValueTreeState apvts;
     ceo::Engine engine;
+    uint32_t seenCaptureRanOut = 0;     // audio thread only: how many 'layer full' events were already passed on
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (CeoAudioProcessor)
 };

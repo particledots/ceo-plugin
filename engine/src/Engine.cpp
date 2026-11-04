@@ -116,6 +116,7 @@ struct Engine::Impl
     bool has[kNumLayers]         = { false, false, false, false, false, false };
     bool layerStereo[kNumLayers] = { false, false, false, false, false, false };
     std::atomic<uint32_t> rev { 0 };            // goes up whenever recorded audio changes (the oscillator and the display watch it)
+    std::atomic<uint32_t> captureRanOut { 0 };  // goes up each time a Capture-button recording ends by itself (layer full)
 
     // For the stream display (read from the plugin window's thread while audio runs).
     static constexpr uint32_t kGrainRing = 128; // must be a power of two
@@ -385,6 +386,11 @@ double Engine::playheadSeconds() const
 uint32_t Engine::recordingRevision() const
 {
     return impl->rev.load();
+}
+
+uint32_t Engine::captureRanOutCount() const
+{
+    return impl->captureRanOut.load();
 }
 
 int Engine::takeGrainStarts (uint32_t& cursor, GrainStart* out, int maxCount) const
@@ -988,7 +994,11 @@ void Engine::process (float* const* channels, int numChannels, int numSamples)
             recordFrame (s.recHead++, newL, newR);
             s.has[s.recLayer] = true;
             if (s.recHead >= s.recLimit)
+            {
                 s.recording = false;                // layer full, or an onset recording has run its time
+                if (! s.recFromOnset)
+                    s.captureRanOut.fetch_add (1);  // the plugin uses this to switch the Capture button off
+            }
         }
 
         // ---- Strike click ----

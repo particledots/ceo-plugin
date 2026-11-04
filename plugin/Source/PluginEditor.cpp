@@ -3,26 +3,27 @@
 namespace
 {
     constexpr int kKnobSize   = 60;
-    constexpr int kCellWidth  = 140;
+    constexpr int kCellWidth  = 110;
     constexpr int kLabelGap   = 62;     // from the top of a knob to its label
     constexpr int kLabelHeight = 16;
     constexpr int kExtraTop   = 82;     // from the top of a knob to the small control under its label
+    constexpr int kRowPitch   = 116;    // from one knob row to the next
 }
 
 //==============================================================================
-// Layout (all in the fixed 500 x 894 space)
-//   title                                         y 12
-//   row 0: Input level / Dry/wet / Output level    y 52
-//   Capture (+ Onset) / layer dial / Strike (+ Erase, Undo)   y 144 to 294
-//   stream display                                y 304 to 400
-//   direction lights under Grain direction        y 506-526
-//   rows 1..4 of three knobs, 118 apart           from y 424
-//   Follow under Scan, Mod target under Mod amount, Input mode under Sense
+// Layout (all in the fixed 784 x 672 space)
+//   title                                           y 10 to 42
+//   left block (x 20 to 220): Input level / Sense, Hold / Dub, Mod amount / Dry/wet, Output level (alone)
+//   right block (x 564 to 764): Intensity / Grain window, Grain direction / Length, Scan / Spray, Pitch / Pitch deviation
+//   rows 116 apart from y 52; the small controls sit under the label of their knob (y +82)
+//   layer dial, centre at (392, 212), 2 times the old size
+//   Capture (+ Onset under it) left and Strike (+ Erase, Undo under it) right, under the dial, y 372 to 452
+//   stream display x 112 to 672, y 526 to 652
 //==============================================================================
 
 int CeoPanel::rowTop (int row)
 {
-    return row == 0 ? 52 : 424 + (row - 1) * 118;
+    return 52 + kRowPitch * row;
 }
 
 CeoPanel::CeoPanel (CeoAudioProcessor& p)
@@ -31,26 +32,24 @@ CeoPanel::CeoPanel (CeoAudioProcessor& p)
       layerDial (*p.getValueTreeState().getParameter (CeoParams::layer)),
       display (p.getEngine(), p.getValueTreeState())
 {
-    // The 15 knobs, in panel order.
-    addKnob (CeoParams::inputLevel,     "Input level",     0, 0);
-    addKnob (CeoParams::dryWet,         "Dry/wet",         0, 1);
-    addKnob (CeoParams::outputLevel,    "Output level",    0, 2);
+    // The 15 knobs. Left block: record and output.
+    addKnob (CeoParams::inputLevel,     "Input level",     kLeftColumn0,     0);
+    addKnob (CeoParams::sense,          "Sense",           kLeftColumn1,     0);
+    addKnob (CeoParams::hold,           "Hold",            kLeftColumn0,     1);
+    addKnob (CeoParams::dub,            "Dub",             kLeftColumn1,     1);
+    addKnob (CeoParams::modAmount,      "Mod amount",      kLeftColumn0,     2);
+    addKnob (CeoParams::dryWet,         "Dry/wet",         kLeftColumn1,     2);
+    addKnob (CeoParams::outputLevel,    "Output level",    kLeftBlockMiddle, 3);
 
-    addKnob (CeoParams::intensity,      "Intensity",       1, 0);
-    addKnob (CeoParams::grainWindow,    "Grain window",    1, 1);
-    addKnob (CeoParams::grainDirection, "Grain direction", 1, 2);
-
-    addKnob (CeoParams::length,         "Length",          2, 0);
-    addKnob (CeoParams::scan,           "Scan",            2, 1);
-    addKnob (CeoParams::spray,          "Spray",           2, 2);
-
-    addKnob (CeoParams::pitch,          "Pitch",           3, 0);
-    addKnob (CeoParams::pitchDeviation, "Pitch deviation", 3, 1);
-    addKnob (CeoParams::modAmount,      "Mod amount",      3, 2);
-
-    addKnob (CeoParams::hold,           "Hold",            4, 0);
-    addKnob (CeoParams::sense,          "Sense",           4, 1);
-    addKnob (CeoParams::dub,            "Dub",             4, 2);
+    // Right block: the grains.
+    addKnob (CeoParams::intensity,      "Intensity",       kRightColumn0,    0);
+    addKnob (CeoParams::grainWindow,    "Grain window",    kRightColumn1,    0);
+    addKnob (CeoParams::grainDirection, "Grain direction", kRightColumn0,    1);
+    addKnob (CeoParams::length,         "Length",          kRightColumn1,    1);
+    addKnob (CeoParams::scan,           "Scan",            kRightColumn0,    2);
+    addKnob (CeoParams::spray,          "Spray",           kRightColumn1,    2);
+    addKnob (CeoParams::pitch,          "Pitch",           kRightColumn0,    3);
+    addKnob (CeoParams::pitchDeviation, "Pitch deviation", kRightColumn1,    3);
 
     // Buttons. Capture, Onset and Follow stay on or off. Strike, Erase and Undo act on every click.
     setUpLatchingButton (captureButton, "Capture", CeoParams::capture,      captureAttachment);
@@ -65,6 +64,7 @@ CeoPanel::CeoPanel (CeoAudioProcessor& p)
 
     addAndMakeVisible (layerDial);
     addAndMakeVisible (display);
+    controlIds.push_back (CeoParams::layer);          // the dial is attached to the layer parameter
 
     setSize (kWidth, kHeight);
     startTimerHz (30);
@@ -75,12 +75,13 @@ CeoPanel::~CeoPanel()
     stopTimer();
 }
 
-void CeoPanel::addKnob (const char* parameterId, const char* label, int row, int column)
+void CeoPanel::addKnob (const char* parameterId, const char* label, int centreX, int row)
 {
     auto cell = std::make_unique<KnobCell>();
-    cell->label  = label;
-    cell->row    = row;
-    cell->column = column;
+    cell->label   = label;
+    cell->centreX = centreX;
+    cell->row     = row;
+    controlIds.push_back (parameterId);
 
     auto* parameter = state.getParameter (parameterId);
     const double defaultValue = parameter != nullptr ? (double) parameter->getDefaultValue() : 0.5;
@@ -107,6 +108,7 @@ void CeoPanel::flipParameter (const char* parameterId)
 void CeoPanel::setUpLatchingButton (juce::TextButton& button, const char* text, const char* parameterId,
                                     std::unique_ptr<ButtonAttachment>& attachment)
 {
+    controlIds.push_back (parameterId);
     button.setButtonText (text);
     button.setClickingTogglesState (true);
     attachment = std::make_unique<ButtonAttachment> (state, parameterId, button);
@@ -117,6 +119,7 @@ void CeoPanel::setUpLatchingButton (juce::TextButton& button, const char* text, 
 // click of the button flips the switch once. The button only looks pressed while the mouse is held down.
 void CeoPanel::setUpClickButton (juce::TextButton& button, const char* text, const char* parameterId)
 {
+    controlIds.push_back (parameterId);
     button.setButtonText (text);
     button.setClickingTogglesState (false);
     button.onClick = [this, parameterId] { flipParameter (parameterId); };
@@ -125,6 +128,7 @@ void CeoPanel::setUpClickButton (juce::TextButton& button, const char* text, con
 
 void CeoPanel::setUpDropdown (juce::ComboBox& box, const char* parameterId, std::unique_ptr<ComboBoxAttachment>& attachment)
 {
+    controlIds.push_back (parameterId);
     if (auto* choice = dynamic_cast<juce::AudioParameterChoice*> (state.getParameter (parameterId)))
         box.addItemList (choice->choices, 1);
 
@@ -134,12 +138,12 @@ void CeoPanel::setUpDropdown (juce::ComboBox& box, const char* parameterId, std:
 
 juce::Rectangle<int> CeoPanel::knobBounds (const KnobCell& cell) const
 {
-    return { columnCentre (cell.column) - kKnobSize / 2, rowTop (cell.row), kKnobSize, kKnobSize };
+    return { cell.centreX - kKnobSize / 2, rowTop (cell.row), kKnobSize, kKnobSize };
 }
 
 juce::Rectangle<int> CeoPanel::ledArea() const
 {
-    const int cx = columnCentre (2);
+    const int cx = kRightColumn0;
     return { cx - 40, rowTop (1) + kExtraTop, 80, 20 };       // under the Grain direction label, clear of the value bubble
 }
 
@@ -148,27 +152,25 @@ void CeoPanel::resized()
     for (auto& cell : knobs)
         cell->knob.setBounds (knobBounds (*cell));
 
-    const int dialY = 144;
-    layerDial.setBounds (250 - LayerDial::kWidth / 2, dialY, LayerDial::kWidth, LayerDial::kHeight);
+    // The layer dial, centred; its middle is at (392, 212).
+    layerDial.setBounds (kWidth / 2 - LayerDial::kWidth / 2, 72, LayerDial::kWidth, LayerDial::kHeight);
 
-    // Capture (and Onset under it) on the left, Strike (and Erase, Undo under it) on the right,
-    // lined up with the middle of the layer dial.
-    const int midY = dialY + 74;
-    captureButton.setBounds (52,  midY - 17, 96, 34);
-    onsetButton.setBounds   (52,  midY + 25, 96, 24);
-    strikeButton.setBounds  (352, midY - 17, 96, 34);
-    eraseButton.setBounds   (352, midY + 25, 46, 24);
-    undoButton.setBounds    (402, midY + 25, 46, 24);
+    // Under the dial: Capture (and Onset under it) on the left, Strike (and Erase, Undo under it) on the right.
+    captureButton.setBounds (240, 372, 100, 44);
+    onsetButton.setBounds   (240, 424, 100, 28);
+    strikeButton.setBounds  (444, 372, 100, 44);
+    eraseButton.setBounds   (444, 424,  48, 28);
+    undoButton.setBounds    (496, 424,  48, 28);
 
-    display.setBounds (30, 304, 440, 96);
+    display.setBounds (112, 526, 560, 126);
 
-    auto extraUnder = [this] (int row, int column, int width, int height)
+    auto extraUnder = [this] (int row, int centreX, int width, int height)
     {
-        return juce::Rectangle<int> (width, height).withCentre ({ columnCentre (column), rowTop (row) + kExtraTop + height / 2 });
+        return juce::Rectangle<int> (width, height).withCentre ({ centreX, rowTop (row) + kExtraTop + height / 2 });
     };
-    followButton.setBounds (extraUnder (2, 1, 76, 24));
-    modTargetBox.setBounds (extraUnder (3, 2, 92, 24));
-    inputModeBox.setBounds (extraUnder (4, 1, 92, 24));
+    followButton.setBounds (extraUnder (2, kRightColumn0, 76, 24));      // under Scan
+    modTargetBox.setBounds (extraUnder (2, kLeftColumn0, 92, 24));       // under Mod amount
+    inputModeBox.setBounds (extraUnder (0, kLeftColumn1, 92, 24));       // under Sense
 }
 
 void CeoPanel::paint (juce::Graphics& g)
@@ -191,7 +193,7 @@ void CeoPanel::paint (juce::Graphics& g)
     g.setFont (font (12.5f));
     for (const auto& cell : knobs)
         g.drawText (cell->label,
-                    juce::Rectangle<int> (columnCentre (cell->column) - kCellWidth / 2, rowTop (cell->row) + kLabelGap, kCellWidth, kLabelHeight),
+                    juce::Rectangle<int> (cell->centreX - kCellWidth / 2, rowTop (cell->row) + kLabelGap, kCellWidth, kLabelHeight),
                     juce::Justification::centred, false);
 
     // The two direction lights under Grain direction: backwards on the left, forwards on the right.
