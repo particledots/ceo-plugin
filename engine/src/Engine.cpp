@@ -10,6 +10,8 @@
 #include <atomic>
 #include <cmath>
 #include <cstdint>
+#include <cstring>
+#include <string>
 #include <thread>
 #include <vector>
 
@@ -126,6 +128,31 @@ struct Engine::Impl
     std::atomic<int>  displayReaders { 0 };     // window-thread readers currently looking at the layer memory
     std::atomic<bool> reallocating   { false }; // true while prepare() is replacing the layer memory
 
+    // Milestone 10: what the plugin's file code may look at (all atomics: read from the main thread while audio runs).
+    std::atomic<int>      uiState[kNumLayers] = {};     // 0 empty, 1 recording, 2 filled (refreshed once per audio block)
+    std::atomic<uint32_t> uiRev[kNumLayers]   = {};     // any change to that layer's audio
+    std::atomic<uint32_t> uiEdit[kNumLayers]  = {};     // changes made by the user (recording over, Erase, Undo)
+    std::atomic<bool>     uiRecording { false };
+    std::atomic<bool>     fmtValid { false };
+    std::atomic<double>   fmtRate { 0.0 };
+    std::atomic<int>      fmtLayerSamples { 0 }, fmtTotalSamples { 0 };
+
+    // Hand-over slots. The buffers are allocated in prepare(); the audio thread only copies between them and the layers.
+    // exportState: 0 idle, 1 asked for, 2 ready, 3 nothing to give, 4 being claimed.  importState: 0 idle, 1 being filled, 2 ready.
+    std::atomic<int> exportState { 0 }, importState { 0 }, importOutcome { 0 }, exportLayerReq { -1 };
+    std::vector<float> exportMem[2], importMem[2];
+    bool     exportStereo = false;
+    uint32_t exportRev = 0, exportEdit = 0;
+    int      importLayerReq = -1;
+    bool     importStereo = false;
+
+    void bump (int layer, bool byUser)
+    {
+        uiRev[layer].fetch_add (1, std::memory_order_relaxed);
+        if (byUser)
+            uiEdit[layer].fetch_add (1, std::memory_order_relaxed);
+    }
+
     void pushGrainStart (double position, bool strike, bool reversed)
     {
         const double clamped = std::max (0.0, std::min (1.0, position));
@@ -205,6 +232,60 @@ struct Engine::Impl
     bool  revRunning = false, dlyRunning = false;
 
     float* plane (int layer, int channel) { return planes.data() + ((size_t) layer * 2 + (size_t) channel) * (size_t) totalSamples; }
+
+    // Once per audio block: what the main thread may see of the layers.
+    void publishState()
+    {
+        for (int i = 0; i < kNumLayers; ++i)
+            uiState[i].store (recording && recLayer == i ? 1 : (has[i] ? 2 : 0), std::memory_order_relaxed);
+        uiRecording.store (recording, std::memory_order_relaxed);
+    }
+
+    // Audio thread, start of a block: carry out a waiting export or import. Memory copies only: no files, no allocation, no locks.
+    void serviceTransfers()
+    {
+        if (exportState.load() == 1)
+        {
+            const int ly = exportLayerReq.load();
+            const bool ok = ly >= 0 && ly < kNumLayers && has[ly] && ! (recording && recLayer == ly)
+                            && (int) exportMem[0].size() == totalSamples && (int) exportMem[1].size() == totalSamples;
+            if (ok)
+            {
+                std::copy (plane (ly, 0), plane (ly, 0) + totalSamples, exportMem[0].begin());
+                exportStereo = layerStereo[ly];
+                if (exportStereo)
+                    std::copy (plane (ly, 1), plane (ly, 1) + totalSamples, exportMem[1].begin());
+                exportRev  = uiRev[ly].load();
+                exportEdit = uiEdit[ly].load();
+                exportState.store (2);
+            }
+            else
+                exportState.store (3);
+        }
+
+        if (importState.load() == 2)
+        {
+            const int ly = importLayerReq;
+            const bool ok = ly >= 0 && ly < kNumLayers && ! recording
+                            && (int) importMem[0].size() == totalSamples && (int) importMem[1].size() == totalSamples;
+            if (ok)
+            {
+                std::copy (importMem[0].begin(), importMem[0].begin() + totalSamples, plane (ly, 0));
+                if (importStereo)
+                    std::copy (importMem[1].begin(), importMem[1].begin() + totalSamples, plane (ly, 1));
+                layerStereo[ly] = importStereo;
+                has[ly]         = true;
+                if (undoLayerIndex == ly)
+                    undoLayerIndex = -1;                // Undo would bring back audio from before this load: no longer meaningful
+                ++rev;
+                bump (ly, false);
+                importOutcome.store (Engine::ImportOk);
+            }
+            else
+                importOutcome.store (Engine::ImportRejected);
+            importState.store (0);
+        }
+    }
 };
 
 Engine::Engine() : impl (std::make_unique<Impl>()) {}
@@ -256,6 +337,17 @@ void Engine::prepare (double newSampleRate, int newMaxBlockSize, int numChannels
 
         impl->planes.assign ((size_t) newTotal * 2 * (size_t) kNumLayers, 0.0f);
         impl->undoPlanes.assign ((size_t) newTotal * 2, 0.0f);
+        for (auto& m : impl->exportMem) m.assign ((size_t) newTotal, 0.0f);
+        for (auto& m : impl->importMem) m.assign ((size_t) newTotal, 0.0f);
+        // A save or load that was under way belongs to the old memory: the export gives nothing, the import is turned down
+        // (the file code then tries again at the new sample rate).
+        if (impl->exportState.load() == 1 || impl->exportState.load() == 2)
+            impl->exportState.store (3);
+        if (impl->importState.load() != 0)
+        {
+            impl->importOutcome.store (ImportRejected);
+            impl->importState.store (0);
+        }
         impl->layerSamples   = newLayer;
         impl->totalSamples   = newTotal;
         impl->undoLayerIndex = -1;
@@ -264,6 +356,14 @@ void Engine::prepare (double newSampleRate, int newMaxBlockSize, int numChannels
             h = false;
         for (bool& st : impl->layerStereo)
             st = false;
+        for (int i = 0; i < kNumLayers; ++i)
+            impl->bump (i, false);                      // the layers were emptied (not by the user): linked layers reload from their files
+
+        impl->fmtRate.store (sampleRate);
+        impl->fmtLayerSamples.store (newLayer);
+        impl->fmtTotalSamples.store (newTotal);
+        impl->fmtValid.store (true);
+        impl->publishState();
 
         impl->reallocating.store (false);
     }
@@ -479,6 +579,8 @@ void Engine::process (float* const* channels, int numChannels, int numSamples)
     if (numChannels <= 0 || numSamples <= 0 || s.totalSamples <= 0)
         return;
 
+    s.serviceTransfers();                                   // milestone 10: a waiting save or load (memory copy only)
+
     const int  nCh        = std::min (numChannels, 2);      // only the first two channels are used
     const bool stereoMode = params.stereoInput && nCh > 1;  // Stereo input mode needs two channels
 
@@ -561,6 +663,8 @@ void Engine::process (float* const* channels, int numChannels, int numSamples)
             s.layerStereo[dest] = false;
         }
 
+        s.bump (dest, true);                        // a user edit: a file linked to this layer no longer matches it
+
         s.recording    = true;
         s.recLayer     = dest;
         s.recHead      = 0;
@@ -615,6 +719,7 @@ void Engine::process (float* const* channels, int numChannels, int numSamples)
         s.has[target]         = false;
         s.layerStereo[target] = false;
         ++s.rev;
+        s.bump (target, true);                      // also when the layer was empty: Erase on a "Missing" layer forgets its file link
     }
 
     if (params.undo != s.prevUndo && ! s.recording)
@@ -629,6 +734,7 @@ void Engine::process (float* const* channels, int numChannels, int numSamples)
             s.has[target]         = true;
             s.undoLayerIndex      = -1;
             ++s.rev;
+            s.bump (target, true);
         }
     }
 
@@ -1204,6 +1310,175 @@ void Engine::process (float* const* channels, int numChannels, int numSamples)
     s.inG = targetIn;  s.senseG = targetSense;  s.dryG = targetDry;  s.wetG = targetWet;  s.outG = targetOut;
     if (s.recording)
         ++s.rev;                                    // the oscillator follows a recording as it grows
+
+    s.publishState();
+}
+
+// ---- Milestone 10: saving and loading layers (see Engine.h) ----
+
+namespace
+{
+// Keeps prepare() from replacing the layer memory while the main thread is using it (the same guard the display uses).
+struct MemoryGuard
+{
+    std::atomic<int>& readers;
+    bool ok;
+    MemoryGuard (std::atomic<int>& r, const std::atomic<bool>& reallocating) : readers (r)
+    {
+        readers.fetch_add (1);
+        ok = ! reallocating.load();
+    }
+    ~MemoryGuard() { readers.fetch_sub (1); }
+};
+} // namespace
+
+int Engine::layerState (int layer) const
+{
+    return layer >= 0 && layer < kNumLayers ? impl->uiState[layer].load (std::memory_order_relaxed) : (int) LayerEmpty;
+}
+
+bool Engine::anyLayerRecording() const
+{
+    return impl->uiRecording.load (std::memory_order_relaxed);
+}
+
+uint32_t Engine::layerRevision (int layer) const
+{
+    return layer >= 0 && layer < kNumLayers ? impl->uiRev[layer].load (std::memory_order_relaxed) : 0u;
+}
+
+uint32_t Engine::layerEditCount (int layer) const
+{
+    return layer >= 0 && layer < kNumLayers ? impl->uiEdit[layer].load (std::memory_order_relaxed) : 0u;
+}
+
+Engine::LayerFormat Engine::layerFormat() const
+{
+    LayerFormat f;
+    f.valid        = impl->fmtValid.load();
+    f.sampleRate   = impl->fmtRate.load();
+    f.layerSamples = impl->fmtLayerSamples.load();
+    f.totalSamples = impl->fmtTotalSamples.load();
+    return f;
+}
+
+bool Engine::requestExport (int layer)
+{
+    if (layer < 0 || layer >= kNumLayers || ! impl->fmtValid.load())
+        return false;
+
+    Impl& s = *impl;
+    const int old = s.exportState.load();
+    if (old == 2 || old == 3)
+        s.exportState.store (0);                        // an old result nobody collected
+    int expected = 0;
+    if (! s.exportState.compare_exchange_strong (expected, 4))
+        return false;
+    s.exportLayerReq.store (layer);
+    s.exportState.store (1);
+    return true;
+}
+
+Engine::IoResult Engine::pollExport (LayerAudio& out)
+{
+    Impl& s = *impl;
+    const int st = s.exportState.load();
+    if (st == 3)
+    {
+        s.exportState.store (0);
+        return ExportEmpty;
+    }
+    if (st != 2)
+        return IoNone;
+
+    MemoryGuard guard (s.displayReaders, s.reallocating);
+    if (! guard.ok)
+        return IoNone;                                  // prepare() is replacing the memory: ask again next time
+
+    const int nch = s.exportStereo ? 2 : 1;
+    out = LayerAudio();
+    out.channels   = nch;
+    out.sampleRate = s.fmtRate.load();
+    for (int c = 0; c < nch; ++c)
+        out.ch[c].assign (s.exportMem[c].begin(), s.exportMem[c].end());
+    s.exportState.store (0);
+    return ExportReady;
+}
+
+uint32_t Engine::exportedRevision() const  { return impl->exportRev; }
+uint32_t Engine::exportedEditCount() const { return impl->exportEdit; }
+
+bool Engine::submitImport (int layer, const LayerAudio& audio, std::string& whyNot)
+{
+    Impl& s = *impl;
+    if (layer < 0 || layer >= kNumLayers)
+    {
+        whyNot = "Pick a layer first.";
+        return false;
+    }
+    if (audio.frames() == 0 || audio.channels < 1 || audio.sampleRate < 1000.0)
+    {
+        whyNot = "That audio is empty.";
+        return false;
+    }
+
+    MemoryGuard guard (s.displayReaders, s.reallocating);
+    if (! guard.ok)
+    {
+        whyNot = "Still busy getting ready - try again in a moment.";
+        return false;
+    }
+    if (! s.fmtValid.load() || s.fmtTotalSamples.load() <= 0 || (int) s.importMem[0].size() != s.fmtTotalSamples.load())
+    {
+        whyNot = "The layers aren't ready yet - let Logic play for a moment, then try again.";
+        return false;
+    }
+    int expected = 0;
+    if (! s.importState.compare_exchange_strong (expected, 1))
+    {
+        whyNot = "Still busy with the last load - try again in a moment.";
+        return false;
+    }
+
+    // From here the main thread owns the import buffers (state 1) until it hands them over (state 2).
+    const size_t total      = (size_t) s.fmtTotalSamples.load();
+    const double engineRate = s.fmtRate.load();
+    const size_t need = std::min (audio.frames(), (size_t) std::ceil ((double) total * audio.sampleRate / engineRate) + 128);
+    auto take = [&] (int c) { return std::vector<float> (audio.ch[c].begin(), audio.ch[c].begin() + (long) need); };
+
+    const bool stereo = audio.channels >= 2;
+    const std::vector<float> a = resampleOffline (take (0), audio.sampleRate, engineRate);
+    const std::vector<float> b = stereo ? resampleOffline (take (1), audio.sampleRate, engineRate) : std::vector<float>();
+    size_t n = std::min (a.size(), total);
+    if (stereo)
+        n = std::min (n, b.size());
+
+    std::fill (s.importMem[0].begin(), s.importMem[0].end(), 0.0f);
+    std::copy (a.begin(), a.begin() + (long) n, s.importMem[0].begin());
+    if (stereo)
+    {
+        std::fill (s.importMem[1].begin(), s.importMem[1].end(), 0.0f);
+        std::copy (b.begin(), b.begin() + (long) n, s.importMem[1].begin());
+    }
+    for (float& v : s.importMem[0])                         // never let a strange file put anything but numbers into a layer
+        v = sanitise (v);
+    if (stereo)
+        for (float& v : s.importMem[1])
+            v = sanitise (v);
+
+    s.importStereo   = stereo;
+    s.importLayerReq = layer;
+    s.importOutcome.store (IoNone);
+    s.importState.store (2);
+    return true;
+}
+
+Engine::IoResult Engine::pollImport()
+{
+    Impl& s = *impl;
+    if (s.importState.load() != 0)
+        return IoNone;
+    return (IoResult) s.importOutcome.exchange (IoNone);
 }
 
 } // namespace ceo

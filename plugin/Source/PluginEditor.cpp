@@ -61,6 +61,19 @@ CeoPanel::CeoPanel (CeoAudioProcessor& p)
     setUpClickButton    (eraseButton,   "Erase",   CeoParams::erase);
     setUpClickButton    (undoButton,    "Undo",    CeoParams::undo);
 
+    // Milestone 10: saving and loading layers as WAV files. No parameters: the files are part of the project, not a control.
+    saveWavButton.setButtonText ("SAVE WAV");
+    loadWavButton.setButtonText ("LOAD WAV");
+    folderButton.setButtonText  ("FOLDER...");
+    saveWavButton.onClick = [this] { startSave (selectedLayer()); };
+    loadWavButton.onClick = [this] { startLoad (selectedLayer()); };
+    folderButton.onClick  = [this] { chooseHome(); };
+    for (auto* b : { &saveWavButton, &loadWavButton, &folderButton })
+        addAndMakeVisible (*b);
+    saveWavButton.setTooltip ("Save the selected layer as a WAV file; the project then stores only a link to it");
+    loadWavButton.setTooltip ("Load a WAV file into the selected layer");
+    folderButton.setTooltip ("Choose the home folder: where saved layers go, and where moved files are looked for");
+
     setUpDropdown (inputModeBox, CeoParams::inputMode, inputModeAttachment);
     setUpDropdown (modTargetBox, CeoParams::modTarget, modTargetAttachment);
     setUpDropdown (pitchSnapBox,  CeoParams::pitchSnap,  pitchSnapAttachment);     // under Pitch
@@ -191,6 +204,11 @@ void CeoPanel::resized()
     eraseButton.setBounds   (444, 424,  48, 28);
     undoButton.setBounds    (496, 424,  48, 28);
 
+    // Milestone 10: SAVE WAV, LOAD WAV, FOLDER... in the free band under Capture and Strike (the two status lines are painted under them).
+    saveWavButton.setBounds (249, 460, 90, 26);
+    loadWavButton.setBounds (347, 460, 90, 26);
+    folderButton.setBounds  (445, 460, 90, 26);
+
     display.setBounds (112, 526, 560, 126);
 
     auto extraUnder = [this] (int row, int centreX, int width, int height)
@@ -218,6 +236,14 @@ void CeoPanel::paint (juce::Graphics& g)
     g.setColour (title());
     g.setFont (font (24.0f, true));
     g.drawText (juce::String ("Ceo"), juce::Rectangle<int> (0, 10, kWidth, 32), juce::Justification::centred, false);
+
+    // The two status lines of milestone 10 (line A: the selected layer's file; line B: the home folder and what is unsaved)
+    g.setFont (font (12.5f));
+    g.setColour (statusColour);
+    g.drawText (statusA, juce::Rectangle<int> (92, 492, kWidth - 184, 18), juce::Justification::centred, true);
+    g.setFont (font (11.0f));
+    g.setColour (lettering().withAlpha (0.6f));
+    g.drawText (statusB, juce::Rectangle<int> (92, 509, kWidth - 184, 16), juce::Justification::centred, true);
 
     // Knob labels
     g.setColour (lettering());
@@ -253,9 +279,147 @@ void CeoPanel::paint (juce::Graphics& g)
     g.fillPath (fwd);
 }
 
+int CeoPanel::selectedLayer() const
+{
+    return (int) (state.getRawParameterValue (CeoParams::layer)->load() + 0.5f);     // 0..5 = alpha..zeta, 6 = Omega
+}
+
+void CeoPanel::showMessage (const juce::String& text)
+{
+    messageText = text;
+    messageTicks = 270;         // about 9 seconds
+}
+
+void CeoPanel::startSave (int layer)
+{
+    if (layer < 0 || layer >= ceo::kNumLayers)
+        return;
+    auto& lib = processor.getLayerLibrary();
+    const auto home = processor.getHomeFolder();
+    home.createDirectory();
+    chooser = std::make_unique<juce::FileChooser> ("Save layer " + CeoStyle::layerName (layer) + " as a WAV file (the project then stores a link to it)",
+                                                   home.getChildFile (juce::String::fromUTF8 (lib.suggestedFileName (layer).c_str())), "*.wav");
+    chooser->launchAsync (juce::FileBrowserComponent::saveMode | juce::FileBrowserComponent::canSelectFiles
+                              | juce::FileBrowserComponent::warnAboutOverwriting,
+                          [this, layer] (const juce::FileChooser& fc)
+    {
+        auto f = fc.getResult();
+        if (f == juce::File())
+            return;                                             // cancelled
+        if (! f.hasFileExtension ("wav"))
+            f = f.withFileExtension ("wav");
+        std::string why;
+        if (! processor.getLayerLibrary().saveLayer (layer, f.getFullPathName().toStdString(), why))
+            showMessage (juce::String::fromUTF8 (why.c_str()));
+    });
+}
+
+void CeoPanel::startLoad (int layer)
+{
+    if (layer < 0 || layer >= ceo::kNumLayers)
+        return;
+    chooser = std::make_unique<juce::FileChooser> ("Load a WAV file into layer " + CeoStyle::layerName (layer) + " (the project then stores a link to it)",
+                                                   processor.getHomeFolder(), "*.wav");
+    chooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles,
+                          [this, layer] (const juce::FileChooser& fc)
+    {
+        const auto f = fc.getResult();
+        if (f == juce::File())
+            return;                                             // cancelled
+        std::string why;
+        if (! processor.getLayerLibrary().loadLayer (layer, f.getFullPathName().toStdString(), why))
+            showMessage (juce::String::fromUTF8 (why.c_str()));
+    });
+}
+
+void CeoPanel::chooseHome()
+{
+    chooser = std::make_unique<juce::FileChooser> ("Choose the home folder for layer files (saved layers go here; moved files are looked for here)",
+                                                   processor.getHomeFolder(), "");
+    chooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectDirectories,
+                          [this] (const juce::FileChooser& fc)
+    {
+        const auto d = fc.getResult();
+        if (d == juce::File() || ! d.isDirectory())
+            return;
+        processor.setHomeFolder (d);
+        showMessage ("Home folder set.");
+    });
+}
+
+void CeoPanel::updateFileStrip()
+{
+    using namespace CeoStyle;
+    auto& lib = processor.getLayerLibrary();
+    const auto& engine = processor.getEngine();
+    const int layer = selectedLayer();
+    const bool isOmega = layer >= ceo::kNumLayers;
+    const bool recording = engine.anyLayerRecording() || state.getRawParameterValue (CeoParams::capture)->load() > 0.5f;
+    const auto amber = juce::Colour (0xFFE0B050), red = juce::Colour (0xFFD9776F);
+
+    int unsaved = 0;
+    for (int i = 0; i < ceo::kNumLayers; ++i)
+        unsaved += lib.info (i).unsaved ? 1 : 0;
+
+    juce::String shown = processor.getHomeFolder().getFullPathName();
+    const auto userHome = juce::File::getSpecialLocation (juce::File::userHomeDirectory).getFullPathName();
+    if (shown.startsWith (userHome))
+        shown = "~" + shown.substring (userHome.length());
+    juce::String b = "Home: " + shown + juce::String (juce::CharPointer_UTF8 ("  \xc2\xb7  "))
+                   + (unsaved == 0 ? juce::String ("all saved") : juce::String (unsaved) + (unsaved == 1 ? " layer not saved" : " layers not saved"));
+
+    juce::String a;
+    auto colour = cream();
+    bool busy = false;
+    if (isOmega)
+    {
+        a = layerName (6) + "  Pick a layer " + layerName (0) + " to " + layerName (5) + " to save or load";
+        colour = cream().withAlpha (0.7f);
+    }
+    else
+    {
+        const auto li = lib.info (layer);
+        const auto name = juce::String::fromUTF8 (li.fileName.c_str());
+        auto msg = juce::String::fromUTF8 (li.message.c_str());
+        msg = msg.substring (0, 1).toUpperCase() + msg.substring (1);       // "missing: x.wav" is shown as "Missing: x.wav"
+        const auto head = layerName (layer) + "  ";
+        busy = li.status == ceo::LayerLibrary::Waiting || li.status == ceo::LayerLibrary::Working;
+        if (busy)               { a = head + msg; colour = amber; b = "(if nothing happens, press Play: Logic must run audio)"; }
+        else if (li.status == ceo::LayerLibrary::Missing)
+                                { a = head + msg; colour = red; b = "Put it back, or point FOLDER... at it"; }
+        else if (li.status == ceo::LayerLibrary::Failed)
+                                { a = head + msg; colour = red; }
+        else if (li.bound)      { a = head + "linked to " + name + (li.status == ceo::LayerLibrary::Changed ? "  (file changed since the project was saved)" : ""); colour = li.status == ceo::LayerLibrary::Changed ? amber : cream(); }
+        else if (li.unsaved)    { a = head + "Not saved to a file: SAVE WAV to keep it"; colour = amber; }
+        else                    { a = head + "empty  -  LOAD WAV to bring a file in"; colour = cream().withAlpha (0.7f); }
+    }
+    if (recording && ! isOmega && ! busy)
+        a = layerName (layer) + "  recording...";
+
+    if (messageTicks > 0)
+    {
+        --messageTicks;
+        b = messageText;
+    }
+
+    // Anything running (any layer) greys everything but FOLDER...
+    const bool anyBusy = lib.busy();
+    const bool ready = engine.layerFormat().valid;
+    const bool canUse = ! isOmega && ! recording && ! anyBusy && ready;
+    saveWavButton.setEnabled (canUse && engine.layerState (juce::jmin (layer, ceo::kNumLayers - 1)) == ceo::Engine::LayerFilled);
+    loadWavButton.setEnabled (canUse);
+
+    if (a != statusA || b != statusB || colour != statusColour)
+    {
+        statusA = a; statusB = b; statusColour = colour;
+        repaint (92, 492, kWidth - 184, 36);
+    }
+}
+
 void CeoPanel::timerCallback()
 {
     display.tick();
+    updateFileStrip();
     repaint (ledArea());
 }
 

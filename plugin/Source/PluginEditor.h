@@ -50,6 +50,14 @@ private:
     void setUpDropdown (juce::ComboBox&, const char* parameterId, std::unique_ptr<ComboBoxAttachment>&);
     void flipParameter (const char* parameterId);
 
+    // Milestone 10: SAVE WAV / LOAD WAV / FOLDER... and the two status lines under Capture and Strike.
+    void updateFileStrip();
+    void startSave (int layer);
+    void startLoad (int layer);
+    void chooseHome();
+    void showMessage (const juce::String&);
+    int  selectedLayer() const;
+
     // The two knob blocks (left: record and output, right: the grains), two columns each.
     static constexpr int kLeftColumn0  = 70,  kLeftColumn1  = 170;
     static constexpr int kRightColumn0 = kWidth - 170, kRightColumn1 = kWidth - 70;
@@ -74,6 +82,12 @@ private:
     StreamDisplay display;
     juce::TextButton captureButton, onsetButton, strikeButton, eraseButton, undoButton, followButton;
     juce::ComboBox inputModeBox, modTargetBox, pitchSnapBox, pitchScaleBox;
+    juce::TextButton saveWavButton, loadWavButton, folderButton;
+    std::unique_ptr<juce::FileChooser> chooser;
+    juce::String statusA, statusB;
+    juce::Colour statusColour;
+    juce::String messageText;
+    int messageTicks = 0;
 
     std::unique_ptr<ButtonAttachment> captureAttachment, onsetAttachment, followAttachment;
     std::unique_ptr<ComboBoxAttachment> inputModeAttachment, modTargetAttachment, pitchSnapAttachment, pitchScaleAttachment;

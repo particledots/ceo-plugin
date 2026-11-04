@@ -10,6 +10,23 @@ about 12% of one core on average and at most about a third of a block's time for
 was left exactly as it was. The build now also runs pluginval on the AU and the VST3 (results are in the package as
 `pluginval-AU.log` and `pluginval-VST3.log`).
 
+Version 0.10.0 (milestone 10, waiting for a test in Logic): **SAVE WAV, LOAD WAV and FOLDER...** for the six layers
+(α to ζ), under Capture and Strike, with two status lines.
+
+- SAVE WAV writes the selected layer (whole 13 s, 16-bit, mono layer = mono file, stereo layer = stereo file) and links
+  the layer to the file. LOAD WAV loads a WAV of any sample rate (converted to the project's rate), mono or stereo,
+  cut to 13 s, replacing the layer without asking (Undo does not bring back what a load replaced).
+- A Logic project stores only the links: path (relative to the home folder when inside it), size and a fingerprint.
+  A moved or renamed file is found again by size and fingerprint (searching the home folder); a file that is gone shows
+  red "Missing" and the link is kept; a file changed since is loaded and flagged. Layers never saved do not come back.
+- FOLDER... sets the home folder (default `~/Music/Unofficial Ceo`, remembered per computer, not per project).
+- Recording over a linked layer, Erase and Undo drop the link. A sample-rate change reloads linked layers from their
+  files at the new rate; unsaved layers are lost then.
+- Omega selected, a recording running, or a save/load in progress: SAVE WAV and LOAD WAV are greyed.
+- The audio thread never touches a file: it only copies memory between ready-made buffers; files are read and written
+  on the main thread (a save/load finishes once Logic is processing audio).
+- No new parameters; all 26 ids unchanged; projects from earlier builds open as before.
+
 Version 0.9.1: the Input mode menu (under Sense) now starts on **Stereo** for a new plugin. Projects saved earlier keep the
 mode they were saved with. On a mono track the plugin still behaves as Mono. Onset capture works in Mono mode only.
 
@@ -35,7 +52,7 @@ Earlier milestones: the styled panel (milestones 6 and 7: squarer layout, round 
 switching itself off when the layer is full), six layers α to ζ (10 s plus a 3 s tail each) and Ω; Capture, Dub,
 Erase, Undo, Strike, Pitch deviation, Follow mode, Onset capture with Hold and Sense, Mono/Stereo input, the Mod
 section (Pan, Hold, Reverb, Delay) and Wavetable mode.
-Not yet working: saving recordings with the project (milestone 10) and loading your own audio (milestone 11).
+Not yet working: Scenes (folders of six WAVs, milestone 11) and the Reaper VST3 test (milestone 12).
 
 ## Folders
 

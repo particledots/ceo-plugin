@@ -5,10 +5,12 @@
 
 #include <juce_audio_processors/juce_audio_processors.h>
 #include <ceo/Engine.h>
+#include <ceo/LayerLibrary.h>
 #include "Parameters.h"
 
 class CeoAudioProcessor : public juce::AudioProcessor,
-                          private juce::AsyncUpdater
+                          private juce::AsyncUpdater,
+                          private juce::Timer
 {
 public:
     CeoAudioProcessor();
@@ -41,14 +43,22 @@ public:
     juce::AudioProcessorValueTreeState& getValueTreeState() { return apvts; }
     const ceo::Engine& getEngine() const { return engine; }
 
+    // Milestone 10: layers saved to and loaded from WAV files. Main thread only.
+    ceo::LayerLibrary& getLayerLibrary() { return library; }
+    juce::File getHomeFolder() const { return homeFolder; }
+    void setHomeFolder (const juce::File&);
+
 private:
     // Called on the main thread after a Capture recording filled its layer: switches the Capture button off.
     void handleAsyncUpdate() override;
+    void timerCallback() override;          // 10 times a second: lets the file library move its work along
 
     ceo::Params readParams() const;
 
     juce::AudioProcessorValueTreeState apvts;
     ceo::Engine engine;
+    ceo::LayerLibrary library { engine };   // after the engine: it is destroyed first
+    juce::File homeFolder;
     uint32_t seenCaptureRanOut = 0;     // audio thread only: how many 'layer full' events were already passed on
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (CeoAudioProcessor)

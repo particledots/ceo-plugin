@@ -1,17 +1,63 @@
 #include "PluginProcessor.h"
 #include "PluginEditor.h"
 
+namespace
+{
+    // Remembered per computer (not per project): the folder where saved layers go and where moved files are searched for.
+    std::unique_ptr<juce::PropertiesFile> openSettings()
+    {
+        juce::PropertiesFile::Options o;
+        o.applicationName = "Unofficial Ceo";
+        o.folderName = "particledots";
+        o.filenameSuffix = ".settings";
+        o.osxLibrarySubFolder = "Application Support";
+        o.storageFormat = juce::PropertiesFile::storeAsXML;
+        return std::make_unique<juce::PropertiesFile> (o);
+    }
+
+    juce::File loadHomeFolder()
+    {
+        if (auto s = openSettings())
+        {
+            const auto v = s->getValue ("homeFolder");
+            if (v.isNotEmpty())
+                return juce::File (v);
+        }
+        return juce::File::getSpecialLocation (juce::File::userMusicDirectory).getChildFile ("Unofficial Ceo");
+    }
+}
+
 CeoAudioProcessor::CeoAudioProcessor()
     : AudioProcessor (BusesProperties()
                           .withInput  ("Input",  juce::AudioChannelSet::stereo(), true)
                           .withOutput ("Output", juce::AudioChannelSet::stereo(), true)),
       apvts (*this, nullptr, "Parameters", CeoParams::createLayout())
 {
+    homeFolder = loadHomeFolder();
+    library.setHomeFolder (homeFolder.getFullPathName().toStdString());
+    startTimerHz (10);
 }
 
 CeoAudioProcessor::~CeoAudioProcessor()
 {
+    stopTimer();
     cancelPendingUpdate();
+}
+
+void CeoAudioProcessor::setHomeFolder (const juce::File& f)
+{
+    homeFolder = f;
+    if (auto s = openSettings())
+    {
+        s->setValue ("homeFolder", f.getFullPathName());
+        s->saveIfNeeded();
+    }
+    library.setHomeFolder (f.getFullPathName().toStdString());
+}
+
+void CeoAudioProcessor::timerCallback()
+{
+    library.tick();
 }
 
 void CeoAudioProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
@@ -112,14 +158,49 @@ juce::AudioProcessorEditor* CeoAudioProcessor::createEditor()
 void CeoAudioProcessor::getStateInformation (juce::MemoryBlock& destData)
 {
     if (auto xml = apvts.copyState().createXml())
+    {
+        // The layers' files (not their audio): which layer (1..6), where the file is (relative to the home folder when it
+        // is inside it), its size and its fingerprint, so the file can be found again if it was moved.
+        const auto refs = library.bindings();
+        if (! refs.empty())
+        {
+            auto* node = xml->createNewChildElement ("LAYERFILES");
+            for (const auto& [layer, b] : refs)
+            {
+                auto* e = node->createNewChildElement ("LAYER");
+                e->setAttribute ("index", layer + 1);
+                e->setAttribute ("path", juce::String::fromUTF8 (b.path.c_str()));
+                e->setAttribute ("size", juce::String ((juce::int64) b.size));
+                e->setAttribute ("hash", juce::String::toHexString ((juce::int64) b.hash));
+            }
+        }
         copyXmlToBinary (*xml, destData);
+    }
 }
 
 void CeoAudioProcessor::setStateInformation (const void* data, int sizeInBytes)
 {
     if (auto xml = getXmlFromBinary (data, sizeInBytes))
         if (xml->hasTagName (apvts.state.getType()))
+        {
+            std::vector<std::pair<int, ceo::LayerLibrary::Binding>> refs;
+            if (auto* node = xml->getChildByName ("LAYERFILES"))     // absent in projects saved before milestone 10
+            {
+                for (auto* e : node->getChildIterator())
+                {
+                    ceo::LayerLibrary::Binding b;
+                    b.path = e->getStringAttribute ("path").toStdString();
+                    b.size = (uint64_t) e->getStringAttribute ("size").getLargeIntValue();
+                    b.hash = (uint64_t) e->getStringAttribute ("hash").getHexValue64();
+                    const int layer = e->getIntAttribute ("index") - 1;
+                    if (layer >= 0 && layer < ceo::kNumLayers && ! b.path.empty())
+                        refs.push_back ({ layer, b });
+                }
+                xml->removeChildElement (node, true);
+            }
             apvts.replaceState (juce::ValueTree::fromXml (*xml));
+            library.restore (refs);
+        }
 }
 
 // This creates new instances of the plugin.

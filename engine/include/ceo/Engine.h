@@ -14,11 +14,15 @@
 // information for the stream display (recent grain starts, a layer's loudness shape).
 // Milestone 8: Pitch Snap (Off / Steps / Semitones) for the Pitch knob and Pitch Scale (Off + 28 scales)
 // for the random jumps of Pitch deviation.
+// Milestone 10: hand-over slots so the plugin can save a layer to a WAV file and load one (the engine never touches a file).
 
 #pragma once
 
+#include "ceo/LayerAudio.h"
+
 #include <cstdint>
 #include <memory>
+#include <string>
 
 namespace ceo
 {
@@ -151,6 +155,42 @@ public:
     // something different from the left in a stereo layer). nullptr if out of range. Read only.
     const float* layerAudio (int layer, int channel) const;
     int    layerAudioLength() const;          // samples in each of those arrays (10 s plus the tail)
+
+    // ---- Milestone 10: saving and loading layers as audio files ----
+    // The engine never touches a file. The plugin's file code (LayerLibrary) asks for a layer's audio, or hands audio
+    // in, through ready-made buffers; the audio thread only copies memory between them and the layers. Everything here
+    // is safe to call from the plugin's main thread while audio runs. Layers are numbered 0..5 (alpha..zeta).
+
+    enum LayerState { LayerEmpty = 0, LayerRecording = 1, LayerFilled = 2 };
+    int      layerState (int layer) const;          // LayerEmpty / LayerRecording / LayerFilled (updated once per audio block)
+    bool     anyLayerRecording() const;             // a recording is running into some layer
+    uint32_t layerRevision (int layer) const;       // goes up whenever that layer's audio changes in any way
+    uint32_t layerEditCount (int layer) const;      // goes up when the user changes it: a recording starts over it, Erase, Undo.
+                                                    // Not for a load, and not when a sample-rate change empties the layers.
+    struct LayerFormat
+    {
+        bool   valid        = false;   // false until prepare() has run
+        double sampleRate   = 0.0;     // the rate the layers are stored at
+        int    layerSamples = 0;       // the 10 s part
+        int    totalSamples = 0;       // 10 s plus the tail (the whole layer, as saved to a file)
+    };
+    LayerFormat layerFormat() const;
+
+    enum IoResult { IoNone = 0, ExportReady, ExportEmpty, ImportOk, ImportRejected };
+
+    // Save: requestExport() asks the audio thread for a copy of one layer; call pollExport() every so often until it
+    // returns something other than IoNone. ExportReady fills 'out' (the whole layer at the project's sample rate).
+    bool     requestExport (int layer);             // false if an earlier request is still in progress
+    IoResult pollExport (LayerAudio& out);
+    uint32_t exportedRevision() const;              // revision and edit count of the layer at the moment it was copied
+    uint32_t exportedEditCount() const;
+
+    // Load: the audio is converted to the project's sample rate (and cut to the layer length) right away, then the
+    // audio thread swaps it into the layer at the start of a block. pollImport() gives ImportOk, or ImportRejected
+    // if a recording was running or the sample rate changed meanwhile. A mono file makes a mono layer, a stereo file
+    // a stereo layer.
+    bool     submitImport (int layer, const LayerAudio& audio, std::string& whyNot);
+    IoResult pollImport();
 
 private:
     struct Impl;

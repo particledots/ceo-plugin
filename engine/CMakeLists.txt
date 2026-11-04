@@ -8,6 +8,8 @@ add_library(ceo_engine STATIC
     src/OnsetDetector.cpp
     src/Effects.cpp
     src/Wavetable.cpp
+    src/LayerAudio.cpp
+    src/LayerLibrary.cpp
 )
 
 target_include_directories(ceo_engine PUBLIC include)
@@ -18,4 +20,11 @@ if(CEO_BUILD_TESTS)
     find_package(Threads REQUIRED)
     target_link_libraries(ceo_engine_test PRIVATE ceo_engine Threads::Threads)
     add_test(NAME engine COMMAND ceo_engine_test)
+
+    add_executable(ceo_library_test tests/library_test.cpp)
+    target_link_libraries(ceo_library_test PRIVATE ceo_engine Threads::Threads)
+    target_compile_definitions(ceo_library_test PRIVATE
+        CEO_ENGINE_CPP="${CMAKE_CURRENT_SOURCE_DIR}/src/Engine.cpp"
+        CEO_ENGINE_H="${CMAKE_CURRENT_SOURCE_DIR}/include/ceo/Engine.h")
+    add_test(NAME library COMMAND ceo_library_test)
 endif()

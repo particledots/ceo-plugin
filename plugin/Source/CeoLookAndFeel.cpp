@@ -61,9 +61,10 @@ void CeoLookAndFeel::drawButtonBackground (juce::Graphics& g, juce::Button& butt
     if (shouldDrawButtonAsHighlighted && ! lit)
         fill = fill.brighter (0.15f);
 
-    g.setColour (fill);
+    const float alpha = button.isEnabled() ? 1.0f : 0.4f;      // greyed out when it cannot be used now
+    g.setColour (fill.withMultipliedAlpha (alpha));
     g.fillRoundedRectangle (r, corner);
-    g.setColour (goldRim());
+    g.setColour (goldRim().withMultipliedAlpha (alpha));
     g.drawRoundedRectangle (r, corner, 1.2f);
 }
 
@@ -73,7 +74,7 @@ void CeoLookAndFeel::drawButtonText (juce::Graphics& g, juce::TextButton& button
 
     const bool lit = button.getToggleState() || shouldDrawButtonAsDown;
     g.setFont (getTextButtonFont (button, button.getHeight()));
-    g.setColour (lit ? background() : lettering());
+    g.setColour ((lit ? background() : lettering()).withMultipliedAlpha (button.isEnabled() ? 1.0f : 0.4f));
     g.drawText (button.getButtonText(), button.getLocalBounds().reduced (3, 0), juce::Justification::centred, true);
 }
 
