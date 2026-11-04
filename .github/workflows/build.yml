@@ -35,6 +35,8 @@ jobs:
   build-macos:
     name: Build AU + VST3 (macOS)
     runs-on: macos-26     # Apple silicon runner; macos-14 is retired by GitHub on 2 Nov 2026
+    permissions:
+      contents: write     # only to put the finished package into a private draft release (last step)
     steps:
       - uses: actions/checkout@v4
 
@@ -134,3 +136,20 @@ jobs:
           name: Ceo-macOS
           path: Ceo-macOS.zip
           if-no-files-found: error
+
+      # A second way to get the package, besides the Actions page: a private DRAFT release (only people with
+      # access to the repo can see it) holding the same zip. Older drafts of this kind are removed first.
+      # A failure here never fails the build.
+      - name: Private draft release with the package
+        if: github.event_name != 'pull_request'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          for id in $(gh api "repos/$GITHUB_REPOSITORY/releases" --paginate --jq '.[] | select(.draft and (.name | startswith("Ceo test build"))) | .id'); do
+            gh api -X DELETE "repos/$GITHUB_REPOSITORY/releases/$id"
+          done
+          gh release create "test-build-${GITHUB_RUN_NUMBER}" Ceo-macOS.zip --draft --target "$GITHUB_SHA" \
+            --title "Ceo test build ${GITHUB_RUN_NUMBER} (${GITHUB_SHA::7})" \
+            --notes "Same package as the Ceo-macOS artifact of this run. Draft: not public."
+          echo "::notice::DRAFT-RELEASE: created test-build-${GITHUB_RUN_NUMBER}"
