@@ -1,6 +1,7 @@
 #include "ceo/Engine.h"
 #include "ceo/Effects.h"
 #include "ceo/Mapping.h"
+#include "ceo/Scales.h"
 #include "ceo/OnsetDetector.h"
 #include "ceo/Wavetable.h"
 #include "ceo/Window.h"
@@ -337,6 +338,8 @@ void Engine::setParams (const Params& newParams)
     fix (params.hold);           fix (params.sense);           fix (params.dub);
     params.layer     = std::max (0, std::min (6, params.layer));
     params.modTarget = std::max (0, std::min (3, params.modTarget));
+    params.pitchSnap  = std::max (0, std::min (2, params.pitchSnap));
+    params.pitchScale = std::max (0, std::min (scales::kNumScales, params.pitchScale));
 }
 
 bool Engine::isRecording() const      { return impl->recording; }
@@ -651,7 +654,8 @@ void Engine::process (float* const* channels, int numChannels, int numSamples)
     const double lenSamples = std::max (8.0, (double) lenSeconds * sr);
     const auto   inten      = map::intensity (params.intensity);
     const float  revProb    = map::reverseProbability (params.grainDirection);
-    const float  baseRatio  = map::pitchRatio (params.pitch);
+    const float  baseRatio  = map::pitchRatioSnapped (params.pitch, params.pitchSnap);   // the Pitch knob's note, with Pitch Snap
+    const int    scaleMask  = scales::maskFor (params.pitchScale);                           // Pitch Scale for the random jumps (0 = Off)
     const double scanPos    = (double) params.scan * span;
     const double followStep = params.follow ? (double) map::followSpeed (params.scan) : 0.0;
     const float  spray      = params.spray;
@@ -777,7 +781,7 @@ void Engine::process (float* const* channels, int numChannels, int numSamples)
         resolveLayer (startAll, layerIndex, start);
 
         // Pitch: knob plus a random deviation, both fixed for the life of the grain.
-        const float deviation = map::pitchDeviationSemitones (params.pitchDeviation, s.rng.uniform());
+        const float deviation = map::pitchDeviationSemitones (params.pitchDeviation, s.rng.uniform(), scaleMask);
         const float ratio     = std::max (0.125f, std::min (8.0f, baseRatio * std::exp2 (deviation / 12.0f)));
 
         const bool reversed = s.rng.uniform() < revProb;
@@ -867,7 +871,7 @@ void Engine::process (float* const* channels, int numChannels, int numSamples)
         if (! wtSlice (pickStartAll (s.rng.uniform()), left, right))
             return;
 
-        const float deviation = map::pitchDeviationSemitones (params.pitchDeviation, s.rng.uniform());
+        const float deviation = map::pitchDeviationSemitones (params.pitchDeviation, s.rng.uniform(), scaleMask);
         const float ratio     = std::max (0.125f, std::min (8.0f, baseRatio * std::exp2 (deviation / 12.0f)));
         const double hz       = (double) map::kWavetableCentreHz * (double) ratio;
         const auto pan        = map::panSettings (modPan, s.rng.uniform(), s.rng.uniform());
@@ -1035,7 +1039,7 @@ void Engine::process (float* const* channels, int numChannels, int numSamples)
             if (s.wtCountdown <= 0.0)
             {
                 s.wtU = s.rng.uniform();
-                const float deviation = map::pitchDeviationSemitones (params.pitchDeviation, s.rng.uniform());
+                const float deviation = map::pitchDeviationSemitones (params.pitchDeviation, s.rng.uniform(), scaleMask);
                 s.wtDevRatio = std::exp2 (deviation / 12.0f);
 
                 const auto pan = map::panSettings (modPan, s.rng.uniform(), s.rng.uniform());

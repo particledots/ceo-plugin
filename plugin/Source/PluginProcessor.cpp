@@ -67,6 +67,8 @@ ceo::Params CeoAudioProcessor::readParams() const
     p.stereoInput    = (int) (get (CeoParams::inputMode) + 0.5f) == 1;
     p.onsetCapture   = get (CeoParams::onsetCapture) > 0.5f;
     p.modTarget      = (int) (get (CeoParams::modTarget) + 0.5f);
+    p.pitchSnap      = (int) (get (CeoParams::pitchSnap) + 0.5f);
+    p.pitchScale     = (int) (get (CeoParams::pitchScale) + 0.5f);
     p.intensity      = get (CeoParams::intensity);
     p.grainWindow    = get (CeoParams::grainWindow);
     p.grainDirection = get (CeoParams::grainDirection);

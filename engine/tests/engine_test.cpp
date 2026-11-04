@@ -2,6 +2,7 @@
 
 #include "ceo/Engine.h"
 #include "ceo/Mapping.h"
+#include "ceo/Scales.h"
 #include "ceo/Window.h"
 
 #include <algorithm>
@@ -9,6 +10,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <set>
 #include <atomic>
 #include <thread>
 #include <vector>
@@ -486,6 +488,7 @@ static void testFuzz()
             p.scan = rnd(); p.spray = rnd(); p.pitch = rnd(); p.pitchDeviation = rnd();
             p.modAmount = rnd(); p.hold = rnd(); p.sense = rnd(); p.dub = rnd();
             p.stereoInput = rnd() > 0.5f; p.onsetCapture = rnd() > 0.5f; p.modTarget = (int) (rnd() * 3.99f);
+            p.pitchSnap = (int) (rnd() * 2.99f); p.pitchScale = (int) (rnd() * 28.99f);
 
             const int n = 1 + (int) (rnd() * 700.0f);
             std::vector<float> a ((size_t) n), b ((size_t) n);
@@ -826,6 +829,348 @@ static void testPitchDeviation()
     CHECK (none > 1e-4, "baseline tone is there");
     CHECK (free  < 0.3 * none, "free deviation spreads the pitch (%g vs %g)", free, none);
     CHECK (steps < 0.3 * none, "semitone deviation spreads the pitch (%g vs %g)", steps, none);
+}
+
+// ---------------------------------------------------------------------------
+// Milestone 8: Pitch Snap and Pitch Scale
+// ---------------------------------------------------------------------------
+
+// Knob position that gives a wanted Pitch in semitones (the inverse of pitchSemitones).
+static float knobForSemitones (float st)
+{
+    if (st == 0.0f)
+        return 0.5f;
+    const float a = 0.02f + 0.98f * std::fabs (st) / 24.0f;
+    return st < 0.0f ? 0.5f - 0.5f * a : 0.5f + 0.5f * a;
+}
+
+// Frequency of a steady tone in part of a signal, from the rising zero crossings (Hz); 0 if there are too few.
+static double crossingFrequency (const std::vector<float>& v, size_t from, size_t to)
+{
+    to = std::min (to, v.size());
+    double first = 0.0, last = 0.0;
+    int n = 0;
+    for (size_t i = from + 1; i < to; ++i)
+    {
+        if (v[i - 1] < 0.0f && v[i] >= 0.0f)
+        {
+            const double t = (double) (i - 1) + (double) (-v[i - 1]) / (double) (v[i] - v[i - 1]);
+            if (n == 0)
+                first = t;
+            last = t;
+            ++n;
+        }
+    }
+    return n >= 4 ? (double) (n - 1) * kSr / (last - first) : 0.0;
+}
+
+// A recorded 440 Hz tone, with the continuous grains switched off, so each Strike gives exactly one grain whose
+// pitch can be measured. 'p' holds the settings under test.
+struct StrikeProbe
+{
+    ceo::Engine e;
+    ceo::Params p;
+
+    StrikeProbe()
+    {
+        e.prepare (kSr, kBlock, 2);
+        record (e, sine (4.0, 440.0, 0.3f));
+        p.dryWet    = 1.0f;
+        p.intensity = 0.0f;          // both ends of Intensity switch the continuous grains off
+        p.length    = 0.45f;         // grains of about 0.44 s
+        process (e, p, silence (0.05));
+    }
+
+    // Fires one Strike grain; returns the pitch it plays in semitones above 440 Hz (NaN if no tone is heard).
+    double fire()
+    {
+        p.strike = ! p.strike;
+        const auto out = process (e, p, silence (0.7));
+        std::vector<float> mono (out.L.size());
+        for (size_t i = 0; i < mono.size(); ++i)
+            mono[i] = out.L[i] + out.R[i];
+        const double f = crossingFrequency (mono, (size_t) (0.12 * kSr), (size_t) (0.32 * kSr));
+        return f > 0.0 ? 12.0 * std::log2 (f / 440.0) : std::nan ("");
+    }
+};
+
+static void testPitchSnap()
+{
+    using namespace ceo::map;
+
+    // Off: the Pitch knob is untouched, exactly as before.
+    for (float k = 0.0f; k <= 1.0f; k += 0.0005f)
+        CHECK (pitchSemitonesSnapped (k, kSnapModeOff) == pitchSemitones (k), "Off must not change the pitch (knob %f)", k);
+
+    // Steps: the knob only reaches +-24, so exactly nine resting places, all of them reached, in order.
+    {
+        const float allowed[9] = { -24.0f, -19.0f, -12.0f, -7.0f, 0.0f, 7.0f, 12.0f, 19.0f, 24.0f };
+        int reached[9] = {};
+        bool onlyAllowed = true, inOrder = true;
+        float previous = -1000.0f;
+        for (float k = 0.0f; k <= 1.0f; k += 0.0002f)
+        {
+            const float v = pitchSemitonesSnapped (k, kSnapModeSteps);
+            int hit = -1;
+            for (int i = 0; i < 9; ++i)
+                if (v == allowed[i])
+                    hit = i;
+            if (hit < 0)
+                onlyAllowed = false;
+            else
+                ++reached[hit];
+            if (v < previous)
+                inOrder = false;
+            previous = v;
+        }
+        CHECK (onlyAllowed, "Steps gives only 0, 7, 12, 19, 24 and their mirror images");
+        CHECK (inOrder, "Steps never goes backwards as the knob turns up");
+        for (int i = 0; i < 9; ++i)
+            CHECK (reached[i] > 100, "Steps: resting place %g is reached (%d knob positions)", (double) allowed[i], reached[i]);
+
+        CHECK (pitchSemitonesSnapped (0.0f, kSnapModeSteps) == -24.0f, "Steps: knob fully down = -24");
+        CHECK (pitchSemitonesSnapped (1.0f, kSnapModeSteps) == 24.0f,  "Steps: knob fully up = +24");
+        CHECK (pitchSemitonesSnapped (0.5f, kSnapModeSteps) == 0.0f,   "Steps: knob at centre = 0");
+
+        // Nearest one wins (the middle between two steps is the border).
+        const float borders[][2] = { { 3.4f, 0.0f }, { 3.6f, 7.0f }, { 9.4f, 7.0f }, { 9.6f, 12.0f }, { 15.4f, 12.0f },
+                                     { 15.6f, 19.0f }, { 21.4f, 19.0f }, { 21.6f, 24.0f }, { 23.9f, 24.0f } };
+        for (const auto& b : borders)
+        {
+            CHECK (snapPitchSemitones ( b[0], kSnapModeSteps) ==  b[1], "Steps: %g snaps to %g", (double)  b[0], (double)  b[1]);
+            CHECK (snapPitchSemitones (-b[0], kSnapModeSteps) == -b[1], "Steps: %g snaps to %g", (double) -b[0], (double) -b[1]);
+            CHECK (pitchSemitonesSnapped (knobForSemitones (b[0]), kSnapModeSteps) == b[1], "Steps through the knob: %g", (double) b[0]);
+        }
+    }
+
+    // Semitones: whole numbers only, all 49 of them reached.
+    {
+        std::set<int> seen;
+        bool whole = true;
+        for (float k = 0.0f; k <= 1.0f; k += 0.0002f)
+        {
+            const float v = pitchSemitonesSnapped (k, kSnapModeSemitones);
+            if (v != std::round (v))
+                whole = false;
+            seen.insert ((int) std::lround (v));
+        }
+        CHECK (whole, "Semitones gives whole numbers only");
+        CHECK (seen.size() == 49 && *seen.begin() == -24 && *seen.rbegin() == 24, "Semitones reaches every whole number from -24 to +24 (%d)", (int) seen.size());
+        CHECK (pitchSemitonesSnapped (0.5f, kSnapModeSemitones) == 0.0f, "Semitones: centre = 0");
+    }
+
+    // Out-of-range menu values are held inside the menu.
+    {
+        ceo::Engine e;
+        e.prepare (kSr, kBlock, 2);
+        ceo::Params p;
+        p.pitchSnap = 99; p.pitchScale = 99;
+        e.setParams (p);
+        CHECK (e.getParams().pitchSnap == 2 && e.getParams().pitchScale == 28, "menus held in range (%d %d)", e.getParams().pitchSnap, e.getParams().pitchScale);
+        p.pitchSnap = -3; p.pitchScale = -3;
+        e.setParams (p);
+        CHECK (e.getParams().pitchSnap == 0 && e.getParams().pitchScale == 0, "negative menu values become Off");
+    }
+
+    // In the engine: measure the pitch a Strike grain really plays (semitones above the recorded 440 Hz tone).
+    {
+        struct Case { int mode; float raw; double expect; };
+        const Case cases[] = {
+            { kSnapModeOff,       5.3f,   5.3 }, { kSnapModeOff,      -9.6f,  -9.6 },
+            { kSnapModeSteps,     3.0f,   0.0 }, { kSnapModeSteps,     5.0f,   7.0 }, { kSnapModeSteps,   10.0f,  12.0 },
+            { kSnapModeSteps,    14.0f,  12.0 }, { kSnapModeSteps,    17.0f,  19.0 }, { kSnapModeSteps,   23.0f,  24.0 },
+            { kSnapModeSteps,    -5.0f,  -7.0 }, { kSnapModeSteps,   -10.0f, -12.0 }, { kSnapModeSteps,  -17.0f, -19.0 },
+            { kSnapModeSteps,   -23.0f, -24.0 },
+            { kSnapModeSemitones, 5.3f,   5.0 }, { kSnapModeSemitones, 5.7f,   6.0 }, { kSnapModeSemitones, -9.6f, -10.0 },
+        };
+        StrikeProbe probe;
+        for (const auto& c : cases)
+        {
+            probe.p.pitch     = knobForSemitones (c.raw);
+            probe.p.pitchSnap = c.mode;
+            const double got = probe.fire();
+            CHECK (std::fabs (got - c.expect) < 0.06, "snap mode %d, knob at %+.1f st: plays %+.3f st, wanted %+.1f", c.mode, (double) c.raw, got, c.expect);
+        }
+    }
+
+    // Wavetable mode follows Pitch Snap too: the oscillator plays the Pitch knob's note.
+    {
+        auto thirteenth = [] (int mode, float raw, double playedSemitones)
+        {
+            ceo::Engine e;
+            e.prepare (kSr, kBlock, 2);
+            record (e, sine (1.0, 300.0, 0.5f));
+            ceo::Params p;
+            p.dryWet = 1.0f; p.length = 0.0f; p.intensity = 0.7f; p.scan = 0.03f; p.spray = 0.0f;
+            p.pitch = knobForSemitones (raw);
+            p.pitchSnap = mode;
+            const auto o = process (e, p, silence (2.0));
+            return tonePower (o.L, 48000, 96000, 13.0 * 130.8128 * std::exp2 (playedSemitones / 12.0));
+        };
+        const double snapped = thirteenth (kSnapModeSteps, 4.0f, 7.0);
+        const double notSnap = thirteenth (kSnapModeSteps, 4.0f, 4.0);
+        CHECK (snapped > 20.0 * std::max (notSnap, 1e-9), "Wavetable with Steps: knob at +4 plays +7 (%g vs %g)", snapped, notSnap);
+        const double offOn  = thirteenth (kSnapModeOff, 4.0f, 4.0);
+        const double offOff = thirteenth (kSnapModeOff, 4.0f, 7.0);
+        CHECK (offOn > 20.0 * std::max (offOff, 1e-9), "Wavetable with Snap Off: knob at +4 plays +4 (%g vs %g)", offOn, offOff);
+    }
+}
+
+// The deviation maths exactly as it was before Pitch Scale existed, to prove that "Off" changes nothing.
+static float referencePitchDeviation (float k, float u)
+{
+    using ceo::map::clamp01;
+    const float d = (clamp01 (k) - 0.5f) * 2.0f;
+    const float a = std::fabs (d);
+    if (a < 0.02f)
+        return 0.0f;
+    const float amount = (a - 0.02f) / 0.98f;
+    if (d < 0.0f)
+        return (2.0f * u - 1.0f) * 12.0f * amount;
+    const int reach = 1 + (int) (amount * 11.999f);
+    int step = (int) (u * (float) (2 * reach + 1));
+    if (step > 2 * reach)
+        step = 2 * reach;
+    return (float) (step - reach);
+}
+
+static void testPitchScale()
+{
+    using namespace ceo::map;
+    namespace sc = ceo::scales;
+
+    CHECK (sc::kNumScales == 28, "28 scales (%d)", sc::kNumScales);
+    CHECK (sc::maskFor (0) == 0 && sc::maskFor (29) == 0 && sc::maskFor (-1) == 0, "Off and out-of-range give no mask");
+    for (int i = 1; i <= sc::kNumScales; ++i)
+    {
+        const int m = sc::maskFor (i);
+        int bits = 0;
+        for (int b = 0; b < 12; ++b)
+            bits += (m >> b) & 1;
+        CHECK (bits == sc::kScales[i - 1].count, "scale %d (%s): mask has %d notes, list says %d", i, sc::kScales[i - 1].name, bits, sc::kScales[i - 1].count);
+        CHECK ((m & 1) == 1, "scale %d (%s): the root is a note of the scale", i, sc::kScales[i - 1].name);
+    }
+    CHECK (sc::maskFor (1)  == (1 << 0 | 1 << 2 | 1 << 4 | 1 << 5 | 1 << 7 | 1 << 9 | 1 << 11), "menu entry 1 is Major (Ionian)");
+    CHECK (sc::maskFor (28) == 0xFFF, "menu entry 28 is Chromatic");
+
+    // Off: bit for bit what the deviation was before.
+    for (float k = 0.0f; k <= 1.0f; k += 0.01f)
+        for (float u = 0.0f; u < 1.0f; u += 0.007f)
+            CHECK (pitchDeviationSemitones (k, u) == referencePitchDeviation (k, u) && pitchDeviationSemitones (k, u, 0) == referencePitchDeviation (k, u),
+                   "Off must leave the deviation untouched (knob %f, u %f)", k, u);
+
+    // With a scale: only notes of the scale, in every scale, at many knob settings.
+    for (int i = 1; i <= sc::kNumScales; ++i)
+    {
+        const int m = sc::maskFor (i);
+        bool ok = true;
+        for (float k = 0.0f; k <= 1.0f; k += 0.025f)
+        {
+            for (float u = 0.0f; u < 1.0f; u += 0.001f)
+            {
+                const float v = pitchDeviationSemitones (k, u, m);
+                const int o = (int) std::lround (v);
+                if (v != (float) o || std::abs (o) > 12 || ! ((m >> (((o % 12) + 12) % 12)) & 1))
+                    ok = false;
+                if (std::fabs (k - 0.5f) < 0.009f && v != 0.0f)
+                    ok = false;
+            }
+        }
+        CHECK (ok, "scale %d (%s): every jump is a whole note of the scale within +-12, none at centre", i, sc::kScales[i - 1].name);
+
+        // At the extremes of the knob every note of the scale inside +-12 is reachable, and about equally often.
+        for (float k : { 0.0f, 1.0f })
+        {
+            int counts[25] = {};
+            for (float u = 0.0f; u < 1.0f; u += 0.0005f)
+                ++counts[(int) std::lround (pitchDeviationSemitones (k, u, m)) + 12];
+            int allowed = 0, lo = 1 << 30, hi = 0;
+            for (int o = -12; o <= 12; ++o)
+            {
+                const bool inScale = (m >> (((o % 12) + 12) % 12)) & 1;
+                if (inScale)
+                {
+                    ++allowed;
+                    lo = std::min (lo, counts[o + 12]);
+                    hi = std::max (hi, counts[o + 12]);
+                }
+                else
+                    CHECK (counts[o + 12] == 0, "scale %d: note %d is not in the scale but was picked", i, o);
+            }
+            CHECK (lo > 0 && hi - lo <= 2, "scale %d (%s), knob %g: all %d notes reached about equally often (%d to %d)", i, sc::kScales[i - 1].name, (double) k, allowed, lo, hi);
+        }
+    }
+
+    // Just above centre the reach is 1 semitone either way: only those notes of the scale can come up.
+    {
+        std::set<int> pent, major, chrom;
+        for (float u = 0.0f; u < 1.0f; u += 0.001f)
+        {
+            pent.insert  ((int) pitchDeviationSemitones (0.55f, u, sc::maskFor (17)));
+            major.insert ((int) pitchDeviationSemitones (0.55f, u, sc::maskFor (1)));
+            chrom.insert ((int) pitchDeviationSemitones (0.45f, u, sc::maskFor (28)));
+        }
+        const std::set<int> wantPent { 0 }, wantMajor { -1, 0 }, wantChrom { -1, 0, 1 };
+        CHECK (pent  == wantPent,  "Major Pentatonic, reach 1: only the root");
+        CHECK (major == wantMajor, "Major, reach 1: root and the note a semitone below (the 7th)");
+        CHECK (chrom == wantChrom, "Chromatic, reach 1: -1, 0, +1");
+    }
+
+    // In the engine: every jump a Strike grain makes lands on a note of the scale, built on the Pitch knob's note.
+    struct Result { int strikes = 0, inScale = 0, outOfScale = 0, silent = 0; std::set<int> offsets; };
+    auto run = [] (int scaleMenu, int snapMode, float rawPitch, float deviationKnob, int strikes)
+    {
+        StrikeProbe probe;
+        probe.p.pitch          = knobForSemitones (rawPitch);
+        probe.p.pitchSnap      = snapMode;
+        probe.p.pitchScale     = scaleMenu;
+        probe.p.pitchDeviation = deviationKnob;
+        const double base = (double) ceo::map::pitchSemitonesSnapped (probe.p.pitch, snapMode);
+        const int mask = ceo::scales::maskFor (scaleMenu);
+        Result r;
+        for (int i = 0; i < strikes; ++i)
+        {
+            const double st = probe.fire();
+            ++r.strikes;
+            if (std::isnan (st)) { ++r.silent; continue; }
+            const double jump = st - base;
+            const int o = (int) std::lround (jump);
+            const bool whole = std::fabs (jump - (double) o) < 0.08;
+            const bool member = whole && ((mask >> (((o % 12) + 12) % 12)) & 1);
+            if (member) ++r.inScale; else ++r.outOfScale;
+            r.offsets.insert (o);
+        }
+        return r;
+    };
+
+    {   // Major Pentatonic on a Steps note (+7), knob at the top
+        const auto r = run (17, kSnapModeSteps, 8.0f, 1.0f, 60);
+        CHECK (r.silent == 0 && r.outOfScale == 0 && r.inScale == 60, "Pentatonic on +7 (Steps): %d in scale, %d outside, %d silent", r.inScale, r.outOfScale, r.silent);
+        CHECK (r.offsets.size() >= 5, "Pentatonic on +7: several different notes are used (%d)", (int) r.offsets.size());
+    }
+    {   // Blues on a note that is not a whole semitone (Pitch Snap Off), knob at the bottom
+        const auto r = run (19, kSnapModeOff, 3.4f, 0.0f, 60);
+        CHECK (r.silent == 0 && r.outOfScale == 0 && r.inScale == 60, "Blues on +3.4 (Snap Off): %d in scale, %d outside, %d silent", r.inScale, r.outOfScale, r.silent);
+        CHECK (r.offsets.size() >= 5, "Blues on +3.4: several different notes are used (%d)", (int) r.offsets.size());
+    }
+    {   // Whole Tone on a negative Semitones note
+        const auto r = run (24, kSnapModeSemitones, -9.6f, 0.8f, 60);
+        CHECK (r.silent == 0 && r.outOfScale == 0 && r.inScale == 60, "Whole Tone on -10 (Semitones): %d in scale, %d outside, %d silent", r.inScale, r.outOfScale, r.silent);
+    }
+    {   // Control: with Pitch Scale Off the same measurement does find notes outside the scale (so the check can fail).
+        StrikeProbe probe;
+        probe.p.pitchDeviation = 1.0f;
+        const int mask = ceo::scales::maskFor (17);
+        int outside = 0;
+        for (int i = 0; i < 60; ++i)
+        {
+            const double st = probe.fire();
+            const int o = (int) std::lround (st);
+            if (! std::isnan (st) && ! ((mask >> (((o % 12) + 12) % 12)) & 1))
+                ++outside;
+        }
+        CHECK (outside > 10, "control: with Pitch Scale Off, notes outside Major Pentatonic do occur (%d of 60)", outside);
+    }
 }
 
 // Knob position that gives a wanted Follow speed (searches the mapping, so the test does not depend on its constants).
@@ -1327,6 +1672,7 @@ static void testWavetable()
             w.dryWet = 1.0f; w.length = rnd() * 0.08f; w.intensity = rnd(); w.pitch = rnd(); w.pitchDeviation = rnd();
             w.scan = rnd(); w.spray = rnd(); w.grainDirection = rnd(); w.grainWindow = rnd(); w.strike = rnd() > 0.5f;
             w.modTarget = (int) (rnd() * 3.99f); w.modAmount = rnd();
+            w.pitchSnap = (int) (rnd() * 2.99f); w.pitchScale = (int) (rnd() * 28.99f);
             auto r = process (f, w, sine (0.4, 200.0 + 800.0 * rnd(), 0.5f));
             CHECK (allFiniteAndBounded (r, 8.0f), "wavetable sweep round %d step %d", round, step);
         }
@@ -1629,6 +1975,8 @@ int main()
     testReverbLevelStaysEven();
     testStrike();
     testPitchDeviation();
+    testPitchSnap();
+    testPitchScale();
     testFollow();
     testMilestone5Mapping();
     testOnsetCapture();

@@ -12,6 +12,8 @@
 // mode, the Mod section (Pan, Hold, Reverb, Delay) and Wavetable mode.
 // Milestone 6: a gentler restart when the host prepares the engine again, and read-only
 // information for the stream display (recent grain starts, a layer's loudness shape).
+// Milestone 8: Pitch Snap (Off / Steps / Semitones) for the Pitch knob and Pitch Scale (Off + 28 scales)
+// for the random jumps of Pitch deviation.
 
 #pragma once
 
@@ -62,6 +64,8 @@ struct Params
     bool  stereoInput    = false;  // false = Mono input mode, true = Stereo input mode (left = input 1, right = input 2)
     bool  onsetCapture   = false;  // on = a detected onset starts recording into the selected layer (Mono input mode only)
     int   modTarget      = 0;      // ModTarget: 0 Pan, 1 Hold, 2 Reverb, 3 Delay
+    int   pitchSnap      = 0;      // Pitch Snap for the Pitch knob: 0 Off, 1 Steps, 2 Semitones (see Mapping.h)
+    int   pitchScale     = 0;      // Pitch Scale for Pitch deviation: 0 Off, 1..28 = the scales in Scales.h
 
     // Grain controls
     float intensity      = 0.5f;

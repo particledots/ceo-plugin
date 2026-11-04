@@ -43,7 +43,8 @@ private:
     };
 
     void timerCallback() override;
-    void addKnob (const char* parameterId, const char* label, int centreX, int row);
+    CeoKnob& addKnob (const char* parameterId, const char* label, int centreX, int row);
+    void setUpPitchReadout (CeoKnob&);
     void setUpLatchingButton (juce::TextButton&, const char* text, const char* parameterId, std::unique_ptr<ButtonAttachment>&);
     void setUpClickButton (juce::TextButton&, const char* text, const char* parameterId);
     void setUpDropdown (juce::ComboBox&, const char* parameterId, std::unique_ptr<ComboBoxAttachment>&);
@@ -58,8 +59,8 @@ private:
     juce::Rectangle<int> knobBounds (const KnobCell&) const;
     juce::Rectangle<int> ledArea() const;
 
-    // Room kept free under Pitch and Pitch deviation for the two menus of the next milestone (Pitch Snap and
-    // Pitch Scale). Nothing is placed there yet.
+    // The two menus of milestone 8, in the places kept free for them: Pitch Snap under Pitch, Pitch Scale under
+    // Pitch deviation.
     static juce::Rectangle<int> pitchSnapSlot()  { return juce::Rectangle<int> (84, 24).withCentre  ({ kRightColumn0, rowTop (3) + 82 + 12 }); }
     static juce::Rectangle<int> pitchScaleSlot() { return juce::Rectangle<int> (108, 24).withCentre ({ kRightColumn1, rowTop (3) + 82 + 12 }); }
 
@@ -72,10 +73,10 @@ private:
     LayerDial layerDial;
     StreamDisplay display;
     juce::TextButton captureButton, onsetButton, strikeButton, eraseButton, undoButton, followButton;
-    juce::ComboBox inputModeBox, modTargetBox;
+    juce::ComboBox inputModeBox, modTargetBox, pitchSnapBox, pitchScaleBox;
 
     std::unique_ptr<ButtonAttachment> captureAttachment, onsetAttachment, followAttachment;
-    std::unique_ptr<ComboBoxAttachment> inputModeAttachment, modTargetAttachment;
+    std::unique_ptr<ComboBoxAttachment> inputModeAttachment, modTargetAttachment, pitchSnapAttachment, pitchScaleAttachment;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (CeoPanel)
 };

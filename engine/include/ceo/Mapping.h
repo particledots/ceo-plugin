@@ -88,6 +88,44 @@ inline float pitchRatio (float k)
     return std::exp2 (pitchSemitones (k) / 12.0f);
 }
 
+// Pitch Snap (our addition): what the Pitch knob settles on.
+//   Off       : smooth, as before.
+//   Steps     : octaves and fifths. The list below is the one from the other particledots plugins; it is
+//               mirrored below zero. This knob only travels +-24 semitones, so only 0, 7, 12, 19 and 24 can
+//               ever be reached here (nine resting places: -24 -19 -12 -7 0 +7 +12 +19 +24). The knob lands
+//               on the nearest one; 31, 36, 43 and 48 are never nearest within this range.
+//   Semitones : whole semitones.
+enum PitchSnapMode { kSnapModeOff = 0, kSnapModeSteps = 1, kSnapModeSemitones = 2 };
+
+constexpr float kSnapStepList[] = { 0.0f, 7.0f, 12.0f, 19.0f, 24.0f, 31.0f, 36.0f, 43.0f, 48.0f };
+
+inline float snapPitchSemitones (float semitones, int mode)
+{
+    if (mode == kSnapModeSemitones)
+        return std::round (semitones);
+    if (mode != kSnapModeSteps)
+        return semitones;
+
+    const float a = std::fabs (semitones);
+    float best = kSnapStepList[0];
+    for (float step : kSnapStepList)
+        if (std::fabs (a - step) < std::fabs (a - best))
+            best = step;
+    return semitones < 0.0f ? -best : best;
+}
+
+// The note the Pitch knob really plays (before any random deviation), in semitones, with Pitch Snap applied.
+// The panel's Pitch readout shows this same number.
+inline float pitchSemitonesSnapped (float k, int mode)
+{
+    return snapPitchSemitones (pitchSemitones (k), mode);
+}
+
+inline float pitchRatioSnapped (float k, int mode)
+{
+    return std::exp2 (pitchSemitonesSnapped (k, mode) / 12.0f);
+}
+
 // Intensity: how many grains overlap, and whether they are evenly spaced.
 struct IntensityMap
 {
@@ -144,7 +182,13 @@ inline float dubGain (float k)
 //   Turned down       : free (unquantised) random offset, up to plus or minus 12 semitones at the bottom.
 //   Turned up         : random offset in whole semitone steps; the reach grows from
 //                       plus or minus 1 semitone just above centre to plus or minus 12 at the top.
-inline float pitchDeviationSemitones (float k, float u)
+//
+// Pitch Scale (our addition): scaleMask is 0 for Off (everything above, exactly as before). Otherwise it is
+// the scale's 12-bit mask (bit n = n semitones above the root; see Scales.h) and the root is the note the
+// Pitch knob plays. Both sides of the knob then give whole-semitone jumps that land only on notes of the
+// scale: the reach is the same as on the "turned up" side (1 to 12 semitones, either way), and one jump is
+// picked with equal chance among the scale's notes inside that reach. The root itself (0) is one of them.
+inline float pitchDeviationSemitones (float k, float u, int scaleMask = 0)
 {
     const float d = (clamp01 (k) - 0.5f) * 2.0f;      // -1 .. +1
     const float a = std::fabs (d);
@@ -152,6 +196,25 @@ inline float pitchDeviationSemitones (float k, float u)
         return 0.0f;
 
     const float amount = (a - 0.02f) / 0.98f;         // 0 .. 1
+
+    if ((scaleMask & 0xFFF) != 0)
+    {
+        const int reach = 1 + (int) (amount * 11.999f);   // 1 .. 12
+        int offsets[25];
+        int count = 0;
+        for (int o = -reach; o <= reach; ++o)
+        {
+            const int pitchClass = ((o % 12) + 12) % 12;
+            if ((scaleMask >> pitchClass) & 1)
+                offsets[count++] = o;
+        }
+        if (count == 0)
+            return 0.0f;
+        int pick = (int) (u * (float) count);
+        if (pick > count - 1)
+            pick = count - 1;
+        return (float) offsets[pick];
+    }
 
     if (d < 0.0f)
         return (2.0f * u - 1.0f) * 12.0f * amount;

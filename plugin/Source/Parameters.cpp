@@ -1,4 +1,5 @@
 #include "Parameters.h"
+#include <ceo/Scales.h>
 
 namespace CeoParams
 {
@@ -67,6 +68,20 @@ juce::AudioProcessorValueTreeState::ParameterLayout createLayout()
     layout.add (knob (hold,           "Hold",            0.5f));
     layout.add (knob (sense,          "Sense",           0.5f));
     layout.add (knob (dub,            "Dub",             0.5f));
+
+    // Milestone 8: Pitch Snap and Pitch Scale. They come last, and carry version 2 (the 24 above are version 1):
+    // for the AU in Logic that keeps every existing parameter exactly where it was in the parameter list, so saved
+    // projects and automation made with earlier builds stay valid. A project saved before these existed simply
+    // loads with both set to Off.
+    layout.add (std::make_unique<juce::AudioParameterChoice> (juce::ParameterID { pitchSnap, 2 },
+                                                              "Pitch Snap", juce::StringArray { "Off", "Steps", "Semitones" }, 0));
+
+    juce::StringArray scaleNames;
+    scaleNames.add ("Off");
+    for (int i = 0; i < ceo::scales::kNumScales; ++i)
+        scaleNames.add (ceo::scales::kScales[i].name);
+    layout.add (std::make_unique<juce::AudioParameterChoice> (juce::ParameterID { pitchScale, 2 },
+                                                              "Pitch Scale", scaleNames, 0));
 
     return layout;
 }

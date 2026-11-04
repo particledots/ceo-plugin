@@ -41,5 +41,9 @@ namespace CeoParams
     inline constexpr const char* sense          = "sense";
     inline constexpr const char* dub            = "dub";
 
+    // Milestone 8: two menus, added after the first release. New ids only; the ones above never change.
+    inline constexpr const char* pitchSnap      = "pitchSnap";      // dropdown under Pitch: Off / Steps / Semitones
+    inline constexpr const char* pitchScale     = "pitchScale";     // dropdown under Pitch deviation: Off + 28 scales
+
     juce::AudioProcessorValueTreeState::ParameterLayout createLayout();
 }

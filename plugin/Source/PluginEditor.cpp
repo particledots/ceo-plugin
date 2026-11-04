@@ -1,4 +1,5 @@
 #include "PluginEditor.h"
+#include <ceo/Mapping.h>
 
 namespace
 {
@@ -16,6 +17,7 @@ namespace
 //   left block (x 20 to 220): Input level / Sense, Hold / Dub, Mod amount / Dry/wet, Output level (alone)
 //   right block (x 564 to 764): Intensity / Grain window, Grain direction / Length, Scan / Spray, Pitch / Pitch deviation
 //   rows 116 apart from y 52; the small controls sit under the label of their knob (y +82)
+//   Pitch Snap menu under Pitch, Pitch Scale menu under Pitch deviation (milestone 8)
 //   layer dial, centre at (392, 212), 2 times the old size
 //   Capture (+ Onset under it) left and Strike (+ Erase, Undo under it) right, under the dial, y 372 to 452
 //   stream display x 112 to 672, y 526 to 652
@@ -48,7 +50,7 @@ CeoPanel::CeoPanel (CeoAudioProcessor& p)
     addKnob (CeoParams::length,         "Length",          kRightColumn1,    1);
     addKnob (CeoParams::scan,           "Scan",            kRightColumn0,    2);
     addKnob (CeoParams::spray,          "Spray",           kRightColumn1,    2);
-    addKnob (CeoParams::pitch,          "Pitch",           kRightColumn0,    3);
+    setUpPitchReadout (addKnob (CeoParams::pitch, "Pitch", kRightColumn0, 3));
     addKnob (CeoParams::pitchDeviation, "Pitch deviation", kRightColumn1,    3);
 
     // Buttons. Capture, Onset and Follow stay on or off. Strike, Erase and Undo act on every click.
@@ -61,6 +63,8 @@ CeoPanel::CeoPanel (CeoAudioProcessor& p)
 
     setUpDropdown (inputModeBox, CeoParams::inputMode, inputModeAttachment);
     setUpDropdown (modTargetBox, CeoParams::modTarget, modTargetAttachment);
+    setUpDropdown (pitchSnapBox,  CeoParams::pitchSnap,  pitchSnapAttachment);     // under Pitch
+    setUpDropdown (pitchScaleBox, CeoParams::pitchScale, pitchScaleAttachment);    // under Pitch deviation
 
     addAndMakeVisible (layerDial);
     addAndMakeVisible (display);
@@ -75,7 +79,7 @@ CeoPanel::~CeoPanel()
     stopTimer();
 }
 
-void CeoPanel::addKnob (const char* parameterId, const char* label, int centreX, int row)
+CeoKnob& CeoPanel::addKnob (const char* parameterId, const char* label, int centreX, int row)
 {
     auto cell = std::make_unique<KnobCell>();
     cell->label   = label;
@@ -92,7 +96,32 @@ void CeoPanel::addKnob (const char* parameterId, const char* label, int centreX,
     cell->knob.setPopupDisplayEnabled (true, false, this);
     addAndMakeVisible (cell->knob);
 
+    CeoKnob& knob = cell->knob;
     knobs.push_back (std::move (cell));
+    return knob;
+}
+
+// The Pitch knob's value bubble (shown while it is dragged) gives the note that really plays, in semitones, as
+// the engine works it out: with Pitch Snap on a whole number such as -12 or +7, with Snap Off the smooth value
+// to two decimals. It uses the same maths as the engine (ceo/Mapping.h), so the two cannot disagree.
+void CeoPanel::setUpPitchReadout (CeoKnob& knob)
+{
+    knob.textFromValueFunction = [this] (double knobPosition)
+    {
+        const int mode = (int) (state.getRawParameterValue (CeoParams::pitchSnap)->load() + 0.5f);
+        const float semitones = ceo::map::pitchSemitonesSnapped ((float) knobPosition, mode);
+
+        if (mode == ceo::map::kSnapModeOff)
+        {
+            const double rounded = std::round ((double) semitones * 100.0) / 100.0;
+            if (rounded == 0.0)
+                return juce::String ("0.00");
+            return (rounded > 0.0 ? juce::String ("+") : juce::String()) + juce::String (rounded, 2);
+        }
+
+        const int whole = (int) std::lround (semitones);
+        return whole > 0 ? "+" + juce::String (whole) : juce::String (whole);
+    };
 }
 
 void CeoPanel::flipParameter (const char* parameterId)
@@ -171,6 +200,8 @@ void CeoPanel::resized()
     followButton.setBounds (extraUnder (2, kRightColumn0, 76, 24));      // under Scan
     modTargetBox.setBounds (extraUnder (2, kLeftColumn0, 92, 24));       // under Mod amount
     inputModeBox.setBounds (extraUnder (0, kLeftColumn1, 92, 24));       // under Sense
+    pitchSnapBox.setBounds  (pitchSnapSlot());                           // under Pitch
+    pitchScaleBox.setBounds (pitchScaleSlot());                          // under Pitch deviation
 }
 
 void CeoPanel::paint (juce::Graphics& g)

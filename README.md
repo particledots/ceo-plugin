@@ -3,22 +3,29 @@
 An original AU / VST3 granular effect for Logic Pro, inspired by the feel of a granular
 Eurorack module. All DSP is our own code; it is not a port or copy of anything.
 
-Status: **milestone 6 (awaiting testing in Logic).** New: the **styled panel** from the approved
-mockup replaces the generic sliders: 15 knobs (double-click returns a knob to its default; knobs
-that default to the centre click into the centre), the round **layer dial** (click an indicator,
-drag round the dial, or use the mouse wheel), **Capture** and **Strike** buttons, **Erase**, **Undo**,
-**Onset** and **Follow** buttons, and the **Mod target** and **Input mode** dropdowns. The **stream
-display** shows the selected layer as a ribbon (thickness = loudness), the grains the engine really
-starts as specks (scatter grows with Spray), a dashed play line, and the Scan marker (the playhead in
-Follow mode); Omega shades through all six layer colours. Two small lights above Grain direction show
-backwards and forwards grains. The window can be resized (drag the bottom-right corner). Every
-parameter id is unchanged. Also: a restart of playback no longer cuts grains, the oscillator and the
-reverb/echo tails dead (the likely cause of the small click on pressing play).
+Status: **milestone 8 (awaiting testing in Logic).** New: two menus under the Pitch controls.
 
-Earlier milestones: six layers α to ζ (10 s plus a 3 s tail each) and Ω; Capture, Dub, Erase, Undo,
-Strike, Pitch deviation, Follow mode, Onset capture with Hold and Sense, Mono/Stereo input, the Mod
+- **Pitch Snap** (menu under **Pitch**: Off / Steps / Semitones). Steps makes the knob land on octaves and fifths:
+  the list is 0, 7, 12, 19, 24, 31, 36, 43, 48 semitones up and down, but this knob only travels +-24, so only
+  0, 7, 12, 19 and 24 can be reached (nine resting places: -24 -19 -12 -7 0 +7 +12 +19 +24). Semitones lands on whole
+  semitones. While you drag the knob, its value bubble shows the note that really plays (a whole number such as
+  -12 or +7; with Snap Off, the smooth value to two decimals). The knob's pointer itself still moves smoothly.
+  Wavetable mode follows Pitch Snap too.
+- **Pitch Scale** (menu under **Pitch deviation**: Off + 28 scales, the same list as the other particledots
+  plugins). With a scale on, the random jumps of Pitch deviation land only on notes of the scale, built on the
+  Pitch knob's note (after Pitch Snap); there is no Key menu. Both sides of the knob then give whole-note jumps,
+  1 to 12 semitones either way (just off centre only +-1, at the ends +-12), each note of the scale inside that
+  reach equally likely, the Pitch knob's own note included.
+- Both are **off by default**. With both Off the sound is exactly what it was before (checked sample by sample).
+- Two new parameters, `pitchSnap` and `pitchScale`, added after the existing 24 (version 2, so the existing ones keep
+  their places in the AU parameter list); every existing id is unchanged, and projects saved with earlier builds
+  load with both menus Off.
+
+Earlier milestones: the styled panel (milestones 6 and 7: squarer layout, round layer dial, stream display, Capture
+switching itself off when the layer is full), six layers α to ζ (10 s plus a 3 s tail each) and Ω; Capture, Dub,
+Erase, Undo, Strike, Pitch deviation, Follow mode, Onset capture with Hold and Sense, Mono/Stereo input, the Mod
 section (Pan, Hold, Reverb, Delay) and Wavetable mode.
-Not yet working: saving recordings with the project and loading your own audio (milestone 7).
+Not yet working: saving recordings with the project and loading your own audio (milestone 9).
 
 ## Folders
 
