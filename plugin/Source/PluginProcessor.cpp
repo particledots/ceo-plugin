@@ -1,4 +1,5 @@
 #include "PluginProcessor.h"
+#include "PluginEditor.h"
 
 CeoAudioProcessor::CeoAudioProcessor()
     : AudioProcessor (BusesProperties()
@@ -71,8 +72,8 @@ void CeoAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mi
 
 juce::AudioProcessorEditor* CeoAudioProcessor::createEditor()
 {
-    // Milestone 2: Logic/JUCE's plain generic sliders. The styled panel is milestone 6.
-    return new juce::GenericAudioProcessorEditor (*this);
+    // The styled panel (milestone 6).
+    return new CeoEditor (*this);
 }
 
 void CeoAudioProcessor::getStateInformation (juce::MemoryBlock& destData)

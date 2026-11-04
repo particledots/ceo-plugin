@@ -6,8 +6,10 @@
 #include "ceo/Window.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <cstdint>
+#include <thread>
 #include <vector>
 
 namespace ceo
@@ -113,7 +115,23 @@ struct Engine::Impl
     int  totalSamples = 0;                      // 10 s + tail
     bool has[kNumLayers]         = { false, false, false, false, false, false };
     bool layerStereo[kNumLayers] = { false, false, false, false, false, false };
-    uint32_t rev = 0;                           // goes up whenever recorded audio changes (the oscillator watches it)
+    std::atomic<uint32_t> rev { 0 };            // goes up whenever recorded audio changes (the oscillator and the display watch it)
+
+    // For the stream display (read from the plugin window's thread while audio runs).
+    static constexpr uint32_t kGrainRing = 128; // must be a power of two
+    std::atomic<uint32_t> grainRing[kGrainRing] = {};
+    std::atomic<uint32_t> grainStartCount { 0 };
+    std::atomic<int>  displayReaders { 0 };     // window-thread readers currently looking at the layer memory
+    std::atomic<bool> reallocating   { false }; // true while prepare() is replacing the layer memory
+
+    void pushGrainStart (double position, bool strike, bool reversed)
+    {
+        const double clamped = std::max (0.0, std::min (1.0, position));
+        const uint32_t packed = (uint32_t) std::lround (clamped * 65535.0) | (strike ? 0x10000u : 0u) | (reversed ? 0x20000u : 0u);
+        const uint32_t n = grainStartCount.load (std::memory_order_relaxed);
+        grainRing[n & (kGrainRing - 1)].store (packed, std::memory_order_relaxed);
+        grainStartCount.store (n + 1, std::memory_order_release);
+    }
 
     // One-step Undo: a copy of one layer as it was before it was last recorded over.
     std::vector<float> undoPlanes;              // 2 * totalSamples
@@ -140,6 +158,7 @@ struct Engine::Impl
     // Button states from the previous block (to spot clicks)
     bool prevCapture = false, prevStrike = false, prevErase = false, prevUndo = false, prevFollow = false;
     bool primed      = false;                   // false until the first block after a reset
+    bool prepared    = false;                   // true once prepare() has done the full set-up at least once
 
     // Follow mode playhead (in samples from the start of the layer, or of alpha in Omega)
     double playhead  = 0.0;
@@ -190,9 +209,31 @@ Engine::~Engine() = default;
 
 void Engine::prepare (double newSampleRate, int newMaxBlockSize, int numChannels)
 {
+    const bool sameSetup = impl->prepared && newSampleRate == sampleRate && numChannels == channelCount;
+
     sampleRate   = newSampleRate;
     maxBlockSize = newMaxBlockSize;
     channelCount = numChannels;
+
+    if (sameSetup)
+    {
+        // The same settings again (the host does this when playback restarts): carry on gently. Grains, the
+        // oscillator and the reverb and echo tails keep going, so nothing is cut off with a click. Only what
+        // belonged to the old playback position is dropped: recording stops, the Follow playhead goes back to
+        // the start, the onset detector starts afresh, and the buttons are read again without counting as clicks.
+        // (reset() is the hard version that silences everything.)
+        Impl& s = *impl;
+        s.recording    = false;
+        s.recHead      = 0;
+        s.primed       = false;
+        s.playhead     = 0.0;
+        s.detector.reset();
+        std::fill (s.ring.begin(), s.ring.end(), 0.0f);
+        s.ringPos      = 0;
+        s.holdLeft     = 0.0;
+        s.prevOnsetOn  = false;
+        return;
+    }
 
     const int newLayer = (int) std::lround ((double) kLayerSeconds * sampleRate);
     const int newTotal = newLayer + (int) std::lround ((double) kTailSeconds * sampleRate);
@@ -200,6 +241,11 @@ void Engine::prepare (double newSampleRate, int newMaxBlockSize, int numChannels
     // Only reallocate (and so lose the recordings) if the sample rate changed.
     if (newTotal != impl->totalSamples)
     {
+        // The plugin window may be reading the layers for the display: wait for it to finish, and keep it out meanwhile.
+        impl->reallocating.store (true);
+        while (impl->displayReaders.load() > 0)
+            std::this_thread::yield();
+
         impl->planes.assign ((size_t) newTotal * 2 * (size_t) kNumLayers, 0.0f);
         impl->undoPlanes.assign ((size_t) newTotal * 2, 0.0f);
         impl->layerSamples   = newLayer;
@@ -210,6 +256,8 @@ void Engine::prepare (double newSampleRate, int newMaxBlockSize, int numChannels
             h = false;
         for (bool& st : impl->layerStereo)
             st = false;
+
+        impl->reallocating.store (false);
     }
 
     impl->detector.prepare (sampleRate);
@@ -224,6 +272,7 @@ void Engine::prepare (double newSampleRate, int newMaxBlockSize, int numChannels
     GrainWindow warmUp;                 // builds the shared window tables now, not on the audio thread
     warmUp.set (0.5f, 0.1f);
 
+    impl->prepared = true;
     reset();
 }
 
@@ -325,6 +374,88 @@ int Engine::layerAudioLength() const
 double Engine::playheadSeconds() const
 {
     return sampleRate > 0.0 ? impl->playhead / sampleRate : 0.0;
+}
+
+uint32_t Engine::recordingRevision() const
+{
+    return impl->rev.load();
+}
+
+int Engine::takeGrainStarts (uint32_t& cursor, GrainStart* out, int maxCount) const
+{
+    if (out == nullptr || maxCount <= 0)
+        return 0;
+
+    const Impl& s = *impl;
+    const uint32_t end = s.grainStartCount.load (std::memory_order_acquire);
+
+    uint32_t available = end - cursor;                  // wraps correctly for an ordinary cursor
+    if (available > Impl::kGrainRing)
+        available = Impl::kGrainRing;                   // the older ones have been overwritten
+    if (available > (uint32_t) maxCount)
+        available = (uint32_t) maxCount;
+
+    const uint32_t first = end - available;
+    for (uint32_t i = 0; i < available; ++i)
+    {
+        const uint32_t packed = s.grainRing[(first + i) & (Impl::kGrainRing - 1)].load (std::memory_order_relaxed);
+        out[i].position = (float) (packed & 0xFFFFu) / 65535.0f;
+        out[i].strike   = (packed & 0x10000u) != 0;
+        out[i].reversed = (packed & 0x20000u) != 0;
+    }
+
+    cursor = end;
+    return (int) available;
+}
+
+bool Engine::layerEnvelope (int layer, float* out, int points) const
+{
+    if (out == nullptr || points <= 0 || layer < 0 || layer >= kNumLayers)
+        return false;
+
+    Impl& s = *impl;
+
+    // Keep prepare() from replacing the memory while we look at it.
+    s.displayReaders.fetch_add (1);
+    if (s.reallocating.load())
+    {
+        s.displayReaders.fetch_sub (1);
+        return false;
+    }
+
+    const int n = s.layerSamples;
+    if (n <= 0 || s.totalSamples <= 0 || ! s.has[layer])
+    {
+        for (int i = 0; i < points; ++i)
+            out[i] = 0.0f;
+        s.displayReaders.fetch_sub (1);
+        return true;
+    }
+
+    const float* left  = s.planes.data() + ((size_t) layer * 2) * (size_t) s.totalSamples;
+    const float* right = s.layerStereo[layer] ? left + s.totalSamples : nullptr;
+
+    // Every 13th sample is plenty for a loudness shape, and 13 does not line up with common pitches the way a round number could.
+    constexpr int kStride = 13;
+    for (int p = 0; p < points; ++p)
+    {
+        const int from = (int) ((int64_t) n * p / points);
+        const int to   = (int) ((int64_t) n * (p + 1) / points);
+        double sum = 0.0;
+        int    count = 0;
+        for (int i = from; i < to; i += kStride)
+        {
+            double v2 = (double) left[i] * (double) left[i];
+            if (right != nullptr)
+                v2 = 0.5 * (v2 + (double) right[i] * (double) right[i]);
+            sum += v2;
+            ++count;
+        }
+        out[p] = count > 0 ? (float) std::sqrt (sum / (double) count) : 0.0f;
+    }
+
+    s.displayReaders.fetch_sub (1);
+    return true;
 }
 
 void Engine::process (float* const* channels, int numChannels, int numSamples)
@@ -623,7 +754,8 @@ void Engine::process (float* const* channels, int numChannels, int numSamples)
 
         int    layerIndex;
         double start;
-        resolveLayer (pickStartAll (s.rng.uniform()), layerIndex, start);
+        const double startAll = pickStartAll (s.rng.uniform());
+        resolveLayer (startAll, layerIndex, start);
 
         // Pitch: knob plus a random deviation, both fixed for the life of the grain.
         const float deviation = map::pitchDeviationSemitones (params.pitchDeviation, s.rng.uniform());
@@ -659,6 +791,8 @@ void Engine::process (float* const* channels, int numChannels, int numSamples)
         g->active = true;
         ++s.activeGrains;
         if (strike) ++s.activeStrike; else ++s.activeContinuous;
+
+        s.pushGrainStart (startAll / span, strike, reversed);    // tells the stream display
     };
 
     // ---- Wavetable helpers ----

@@ -3,23 +3,29 @@
 An original AU / VST3 granular effect for Logic Pro, inspired by the feel of a granular
 Eurorack module. All DSP is our own code; it is not a port or copy of anything.
 
-Status: **milestone 5 (awaiting testing in Logic).** Six layers α to ζ (10 s plus a 3 s tail
-each) and Ω; Capture, Dub, Erase, Undo, Strike, Pitch deviation and Follow mode as before. New:
-**Onset capture** (plain button, Mono input only): a detected attack starts recording into the
-selected layer; **Hold** sets how long it records and how long it ignores further attacks; **Sense**
-sets how sensitive the detector is. **Input mode** (dropdown): Mono, or Stereo (left and right
-inputs recorded as a stereo layer; Sense then sets the right-hand input level). **Mod target**
-(dropdown: Pan, Hold, Reverb, Delay) chooses what **Mod amount** does (centre = off). **Wavetable
-mode**: turn Length fully down and grains cross over into an oscillator built from the recording.
-Follow mode loop length now follows Hold. Still generic sliders.
-Not yet working: styled panel (milestone 6), saving recordings with the project (7).
+Status: **milestone 6 (awaiting testing in Logic).** New: the **styled panel** from the approved
+mockup replaces the generic sliders: 15 knobs (double-click returns a knob to its default; knobs
+that default to the centre click into the centre), the round **layer dial** (click an indicator,
+drag round the dial, or use the mouse wheel), **Capture** and **Strike** buttons, **Erase**, **Undo**,
+**Onset** and **Follow** buttons, and the **Mod target** and **Input mode** dropdowns. The **stream
+display** shows the selected layer as a ribbon (thickness = loudness), the grains the engine really
+starts as specks (scatter grows with Spray), a dashed play line, and the Scan marker (the playhead in
+Follow mode); Omega shades through all six layer colours. Two small lights above Grain direction show
+backwards and forwards grains. The window can be resized (drag the bottom-right corner). Every
+parameter id is unchanged. Also: a restart of playback no longer cuts grains, the oscillator and the
+reverb/echo tails dead (the likely cause of the small click on pressing play).
+
+Earlier milestones: six layers α to ζ (10 s plus a 3 s tail each) and Ω; Capture, Dub, Erase, Undo,
+Strike, Pitch deviation, Follow mode, Onset capture with Hold and Sense, Mono/Stereo input, the Mod
+section (Pan, Hold, Reverb, Delay) and Wavetable mode.
+Not yet working: saving recordings with the project and loading your own audio (milestone 7).
 
 ## Folders
 
 | Folder | What it is |
 |---|---|
 | `engine/` | The audio engine. Plain C++, no plugin code. This is the part reused for later plugins. |
-| `plugin/` | The plugin wrapper: what Logic sees, the list of controls, the generic sliders. |
+| `plugin/` | The plugin wrapper: what Logic sees, the list of controls, and the styled panel (`PluginEditor`, `CeoControls`, `CeoLookAndFeel`, `StreamDisplay`). |
 | `.github/workflows/` | The automatic build. |
 
 The wrapper hands the engine the control values and the audio; the engine hands audio back.

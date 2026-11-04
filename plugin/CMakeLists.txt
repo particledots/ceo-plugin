@@ -22,6 +22,14 @@ target_sources(Ceo PRIVATE
     Source/Parameters.cpp
     Source/PluginProcessor.h
     Source/PluginProcessor.cpp
+    Source/PluginEditor.h
+    Source/PluginEditor.cpp
+    Source/CeoLookAndFeel.h
+    Source/CeoLookAndFeel.cpp
+    Source/CeoControls.h
+    Source/CeoControls.cpp
+    Source/StreamDisplay.h
+    Source/StreamDisplay.cpp
 )
 
 target_compile_definitions(Ceo PUBLIC
@@ -34,6 +42,7 @@ target_link_libraries(Ceo
     PRIVATE
         ceo_engine
         juce::juce_audio_processors
+        juce::juce_gui_basics
     PUBLIC
         juce::juce_recommended_config_flags
         juce::juce_recommended_warning_flags

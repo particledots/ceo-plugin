@@ -36,6 +36,10 @@ public:
     void getStateInformation (juce::MemoryBlock& destData) override;
     void setStateInformation (const void* data, int sizeInBytes) override;
 
+    // For the panel: the controls, and read-only information from the engine (stream display).
+    juce::AudioProcessorValueTreeState& getValueTreeState() { return apvts; }
+    const ceo::Engine& getEngine() const { return engine; }
+
 private:
     ceo::Params readParams() const;
 

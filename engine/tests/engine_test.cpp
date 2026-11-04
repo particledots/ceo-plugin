@@ -9,6 +9,8 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <atomic>
+#include <thread>
 #include <vector>
 
 static int failures = 0;
@@ -1339,6 +1341,227 @@ static void testMilestone5Mapping()
     }
 }
 
+// ---------------------------------------------------------------------------
+// Milestone 6: restarting playback
+// ---------------------------------------------------------------------------
+
+// Logic can prepare the plugin again with the same settings when playback restarts. Sound that is already
+// playing (grains, the oscillator, reverb and echo tails) must carry on without an audible jump.
+// The test restarts several times in the middle of a steady sound and compares the jump across the
+// restart with the largest ordinary step between neighbouring samples just before it.
+static void testRestartIsGentle()
+{
+    for (int variant = 0; variant < 4; ++variant)
+    {
+        ceo::Engine e;
+        e.prepare (kSr, kBlock, 2);
+        record (e, sine (4.0, 220.0, 0.5f));
+
+        ceo::Params p;
+        p.dryWet = 1.0f; p.length = 0.55f; p.intensity = 0.5f; p.spray = 0.4f;   // grains from all over the recording: a steady sound
+        if (variant == 1) { p.modTarget = ceo::kModReverb; p.modAmount = 0.85f; }
+        if (variant == 2) { p.modTarget = ceo::kModDelay;  p.modAmount = 0.85f; }
+        if (variant == 3) { p.length = 0.0f; }           // Wavetable mode: the oscillator is the sound
+
+        auto run = [&] (int blocks) { return process (e, p, std::vector<float> ((size_t) blocks * kBlock, 0.0f)); };
+
+        run (400);                                       // about 2 s, so the sound is fully going
+
+        float worst = 0.0f, loudest = 0.0f;
+        for (int r = 0; r < 6; ++r)
+        {
+            auto before = run (10 + r);                  // a different place in the sound each time
+            e.prepare (kSr, kBlock, 2);                  // what Logic does when playback restarts
+            auto after = run (3);
+
+            const size_t n = before.L.size();
+            float natural = 0.0f;
+            for (size_t i = n - 2400; i + 1 < n; ++i)
+                natural = std::max (natural, std::max (std::fabs (before.L[i + 1] - before.L[i]), std::fabs (before.R[i + 1] - before.R[i])));
+            const float jump = std::max (std::fabs (after.L[0] - before.L[n - 1]), std::fabs (after.R[0] - before.R[n - 1]));
+            worst = std::max (worst, jump / std::max (natural, 1e-4f));
+            loudest = std::max (loudest, rms (before.L, n - 2400, n));
+        }
+        std::printf ("restart test, variant %d: worst jump = %.2f x the normal sample step (limit 3)\n", variant, worst);
+        CHECK (loudest > 0.01f, "variant %d: there was sound to cut (%f)", variant, loudest);
+        CHECK (worst < 3.0f, "variant %d: a restart makes a jump %.1f times the normal sample step", variant, worst);
+        CHECK (e.layerHasContent (0), "variant %d: the recording survives a restart", variant);
+    }
+
+    // A restart while recording stops the recording and keeps what was recorded so far.
+    {
+        ceo::Engine e;
+        e.prepare (kSr, kBlock, 2);
+        ceo::Params p;
+        p.dryWet = 0.0f;
+        process (e, p, silence (0.02));
+        p.capture = true;
+        process (e, p, sine (0.5, 220.0, 0.5f));
+        CHECK (e.isRecording(), "recording is going");
+        e.prepare (kSr, kBlock, 2);
+        CHECK (! e.isRecording(), "a restart stops recording");
+        CHECK (e.layerHasContent (0), "what was recorded so far is kept");
+    }
+}
+
+// Information for the stream display: recent grain starts, the recording counter and a layer's loudness shape.
+static void testDisplayInfo()
+{
+    ceo::Engine e;
+    e.prepare (kSr, kBlock, 2);
+
+    // Recording counter: goes up when recording and when erasing.
+    const uint32_t rev0 = e.recordingRevision();
+    float env[40];
+    CHECK (e.layerEnvelope (0, env, 40), "an empty layer can be read");
+    float emptySum = 0.0f;
+    for (float v : env) emptySum += v;
+    CHECK (emptySum == 0.0f, "an empty layer has a flat envelope");
+    CHECK (! e.layerEnvelope (6, env, 40) && ! e.layerEnvelope (-1, env, 40), "only layers 0 to 5 can be read");
+
+    record (e, sine (1.0, 220.0, 0.5f));                 // 1 s of sine at the start of layer alpha
+    CHECK (e.recordingRevision() != rev0, "recording changes the counter");
+
+    // Loudness shape: 40 points over 10 s = 0.25 s each. The first four carry the sine (RMS 0.5/sqrt 2), the rest are silent.
+    CHECK (e.layerEnvelope (0, env, 40), "a recorded layer can be read");
+    for (int i = 0; i < 3; ++i)
+        CHECK (std::fabs (env[i] - 0.3536f) < 0.02f, "envelope point %d carries the sine (%f)", i, env[i]);
+    for (int i = 6; i < 40; ++i)
+        CHECK (env[i] < 0.005f, "envelope point %d is silent (%f)", i, env[i]);
+    CHECK (e.layerEnvelope (1, env, 40) && env[0] == 0.0f, "another layer is still empty");
+
+    const uint32_t rev1 = e.recordingRevision();
+    ceo::Params p;
+    p.dryWet = 1.0f;
+    process (e, p, silence (0.02));
+    click (e, p, p.erase);
+    CHECK (e.recordingRevision() != rev1, "Erase changes the counter");
+    CHECK (e.layerEnvelope (0, env, 40) && env[0] == 0.0f, "Erase empties the envelope");
+
+    // Grain starts.
+    ceo::Engine g;
+    g.prepare (kSr, kBlock, 2);
+    record (g, sine (3.0, 220.0, 0.2f));
+    uint32_t cursor = 0;
+    ceo::GrainStart gs[200];
+    g.takeGrainStarts (cursor, gs, 200);                 // grains that started while recording are not interesting
+    CHECK (g.takeGrainStarts (cursor, gs, 200) == 0, "nothing new since the last call");
+
+    ceo::Params q;
+    q.dryWet = 1.0f; q.length = 0.3f; q.scan = 0.2f; q.spray = 0.0f; q.grainDirection = 0.0f;
+    process (g, q, silence (0.6));
+    int n = g.takeGrainStarts (cursor, gs, 200);
+    CHECK (n > 5 && n <= 128, "continuous grains are reported (%d)", n);
+    bool allAtScan = true, anyStrike = false, anyReversed = false;
+    for (int i = 0; i < n; ++i)
+    {
+        if (std::fabs (gs[i].position - 0.2f) > 0.005f) allAtScan = false;
+        anyStrike   = anyStrike   || gs[i].strike;
+        anyReversed = anyReversed || gs[i].reversed;
+    }
+    CHECK (allAtScan, "with no Spray every grain starts at the Scan position");
+    CHECK (! anyStrike && ! anyReversed, "continuous forward grains are not marked as Strike or reversed");
+    CHECK (g.takeGrainStarts (cursor, gs, 200) == 0, "nothing new is reported twice");
+
+    // Backwards grains and Spray.
+    q.grainDirection = 1.0f; q.spray = 1.0f;
+    process (g, q, silence (0.6));
+    n = g.takeGrainStarts (cursor, gs, 200);
+    bool allReversed = n > 5;
+    float lo = 1.0f, hi = 0.0f;
+    for (int i = 0; i < n; ++i)
+    {
+        allReversed = allReversed && gs[i].reversed;
+        lo = std::min (lo, gs[i].position);
+        hi = std::max (hi, gs[i].position);
+    }
+    CHECK (allReversed, "Grain direction at the end: every grain is reported as reversed");
+    CHECK (hi - lo > 0.3f && lo >= 0.0f && hi <= 1.0f, "full Spray spreads the starts over the layer (%f to %f)", lo, hi);
+
+    // Strike only (continuous engine off): one click, one reported start, marked as Strike.
+    ceo::Engine k;
+    k.prepare (kSr, kBlock, 2);
+    record (k, sine (3.0, 220.0, 0.2f));
+    ceo::Params r;
+    r.dryWet = 1.0f; r.intensity = 0.0f; r.length = 0.4f; r.scan = 0.05f;
+    process (k, r, silence (0.1));
+    uint32_t kc = 0;
+    k.takeGrainStarts (kc, gs, 200);                     // (drain what started while recording)
+    process (k, r, silence (0.1));
+    CHECK (k.takeGrainStarts (kc, gs, 200) == 0, "continuous engine off: nothing starts by itself");
+    click (k, r, r.strike);
+    n = k.takeGrainStarts (kc, gs, 200);
+    CHECK (n == 1 && gs[0].strike && std::fabs (gs[0].position - 0.05f) < 0.005f, "one Strike click, one reported Strike start (%d)", n);
+
+    // More starts than the engine remembers: only the newest 128 come back, and never more than asked for.
+    ceo::Engine m;
+    m.prepare (kSr, kBlock, 2);
+    record (m, sine (3.0, 220.0, 0.2f));
+    ceo::Params t;
+    t.dryWet = 1.0f; t.length = 0.002f; t.intensity = 0.5f;
+    process (m, t, silence (2.0));
+    uint32_t mc = 0;
+    n = m.takeGrainStarts (mc, gs, 200);
+    CHECK (n == 128, "at most the last 128 starts are kept (%d)", n);
+    process (m, t, silence (0.5));
+    CHECK (m.takeGrainStarts (mc, gs, 10) <= 10, "never more than asked for");
+
+    // In Omega the position runs along all six layers: Scan 0.08 is 4.8 s of 60 s, inside layer alpha.
+    ceo::Engine o;
+    o.prepare (kSr, kBlock, 2);
+    record (o, sine (3.0, 220.0, 0.2f));
+    ceo::Params u;
+    u.dryWet = 1.0f; u.layer = 6; u.scan = 0.01f; u.length = 0.3f;
+    process (o, u, silence (0.6));
+    uint32_t oc = 0;
+    n = o.takeGrainStarts (oc, gs, 200);
+    bool allThere = n > 3;
+    for (int i = 0; i < n; ++i)
+        if (std::fabs (gs[i].position - 0.01f) > 0.005f) allThere = false;
+    CHECK (allThere, "in Omega the start position is along all six layers (%d starts)", n);
+}
+
+// The plugin window reads the layers for the display while audio runs. When the host changes the sample rate the
+// engine replaces the layer memory; the window's reading must never touch memory that has just gone.
+// (Run with the address sanitizer, a failure here is reported as a memory error.)
+static void testDisplayWhileReallocating()
+{
+    ceo::Engine e;
+    e.prepare (kSr, kBlock, 2);
+
+    std::atomic<bool> stop { false };
+    std::atomic<int>  reads { 0 };
+    std::thread reader ([&]
+    {
+        float env[72];
+        ceo::GrainStart gs[64];
+        uint32_t cursor = 0;
+        while (! stop.load())
+        {
+            if (e.layerEnvelope (0, env, 72))
+                ++reads;
+            e.takeGrainStarts (cursor, gs, 64);
+            (void) e.recordingRevision();
+        }
+    });
+
+    for (int i = 0; i < 40; ++i)
+    {
+        e.prepare ((i % 2) ? 44100.0 : 48000.0, kBlock, 2);          // new memory each time
+        ceo::Params p;
+        p.dryWet = 0.0f;
+        process (e, p, silence (0.01));
+        p.capture = true;
+        process (e, p, sine (0.1, 220.0, 0.5f));                     // layer alpha now has content: the reader really reads it
+        p.capture = false;
+        process (e, p, silence (0.01));
+    }
+
+    stop = true;
+    reader.join();
+    CHECK (reads.load() > 0, "the display could read the layer while the engine ran (%d reads)", reads.load());
+}
+
 int main()
 {
     testMapping();
@@ -1364,6 +1587,9 @@ int main()
     testStereoInput();
     testModSection();
     testWavetable();
+    testRestartIsGentle();
+    testDisplayInfo();
+    testDisplayWhileReallocating();
 
     if (failures == 0)
         std::printf ("engine tests: all checks OK\n");

@@ -10,9 +10,12 @@
 // one-step Undo and Erase, Strike grains, Pitch deviation and Follow mode.
 // Milestone 5: onset detection (Onset capture, Hold, Sense), Mono/Stereo input
 // mode, the Mod section (Pan, Hold, Reverb, Delay) and Wavetable mode.
+// Milestone 6: a gentler restart when the host prepares the engine again, and read-only
+// information for the stream display (recent grain starts, a layer's loudness shape).
 
 #pragma once
 
+#include <cstdint>
 #include <memory>
 
 namespace ceo
@@ -29,6 +32,14 @@ constexpr float kPreRollSeconds       = 0.030f; // audio kept from just before a
 
 // What the Mod amount knob controls (Params::modTarget).
 enum ModTarget { kModPan = 0, kModHold = 1, kModReverb = 2, kModDelay = 3 };
+
+// One grain that has just started, as reported to the stream display.
+struct GrainStart
+{
+    float position = 0.0f;   // 0..1 along the layer (in Omega: along all six layers end to end)
+    bool  strike   = false;  // started by the Strike button
+    bool  reversed = false;  // plays backwards
+};
 
 // All control values the engine can be given. Knobs run from 0.0 to 1.0
 // (0.5 is the centre position). Every value is "as the knob is set"; the engine
@@ -78,12 +89,30 @@ public:
 
     // Called before audio starts, and again if the sample rate or block size changes.
     // Allocates memory, so it is never called from the audio thread. Recordings
-    // in the layers are kept unless the sample rate changed.
+    // in the layers are kept unless the sample rate changed. Called again with the
+    // same sample rate and channel count (as hosts do when playback restarts), it
+    // carries on gently: grains, the oscillator and reverb/echo tails keep sounding.
     void prepare (double sampleRate, int maxBlockSize, int numChannels);
 
-    // Stop recording and silence all grains (called when playback restarts).
-    // The recorded layers themselves are kept.
+    // Stop recording and silence everything at once: all grains, the oscillator, the reverb and echo tails.
+    // The recorded layers themselves are kept. (A host restart does not use this: see prepare().)
     void reset();
+
+    // ---- Read-only information for the stream display ----
+    // Safe to call from the plugin window's thread while audio is running.
+
+    // Goes up whenever recorded audio changes (recording, Erase, Undo).
+    uint32_t recordingRevision() const;
+
+    // Grain starts since 'cursor' (pass 0 the first time; it is updated), oldest first. The engine remembers
+    // the last 128; if more happened since the last call, or more than maxCount, the oldest are skipped.
+    // Returns how many were written to 'out'.
+    int takeGrainStarts (uint32_t& cursor, GrainStart* out, int maxCount) const;
+
+    // The loudness shape of one layer's 10 seconds: 'points' values, each the level (RMS, 0 = silent) of one
+    // equal slice. An empty layer gives zeros. Returns false if the layer number is wrong or the memory is
+    // being re-allocated at this moment (try again on the next tick).
+    bool layerEnvelope (int layer, float* out, int points) const;
 
     // Give the engine the current control values. Called once per audio block.
     void setParams (const Params& newParams);

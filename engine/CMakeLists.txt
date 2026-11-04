@@ -15,6 +15,7 @@ target_compile_features(ceo_engine PUBLIC cxx_std_17)
 
 if(CEO_BUILD_TESTS)
     add_executable(ceo_engine_test tests/engine_test.cpp)
-    target_link_libraries(ceo_engine_test PRIVATE ceo_engine)
+    find_package(Threads REQUIRED)
+    target_link_libraries(ceo_engine_test PRIVATE ceo_engine Threads::Threads)
     add_test(NAME engine COMMAND ceo_engine_test)
 endif()
