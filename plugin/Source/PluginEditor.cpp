@@ -74,6 +74,19 @@ CeoPanel::CeoPanel (CeoAudioProcessor& p)
     loadWavButton.setTooltip ("Load a WAV file into the selected layer");
     folderButton.setTooltip ("Choose the home folder: where saved layers go, and where moved files are looked for");
 
+    // Milestone 11: Scenes. Two boxes in the free corners beside the title. No parameters: a Scene is files plus a link in the project.
+    for (auto* b : { &sceneBox, &loadBox })
+    {
+        b->setEditableText (false);
+        b->setJustificationType (juce::Justification::centredLeft);
+        addAndMakeVisible (*b);
+    }
+    sceneBox.onShowPopup = [this] { showSceneMenu(); };
+    loadBox.onShowPopup  = [this] { showLoadMenu(); };
+    sceneBox.setTooltip ("Pick a Scene (a folder of six WAV files plus a settings file), or save one");
+    loadBox.setTooltip ("What picking a Scene loads: as the file says, layers only, layers + settings, or settings only");
+    updateSceneBoxes();
+
     setUpDropdown (inputModeBox, CeoParams::inputMode, inputModeAttachment);
     setUpDropdown (modTargetBox, CeoParams::modTarget, modTargetAttachment);
     setUpDropdown (pitchSnapBox,  CeoParams::pitchSnap,  pitchSnapAttachment);     // under Pitch
@@ -208,6 +221,10 @@ void CeoPanel::resized()
     saveWavButton.setBounds (249, 460, 90, 26);
     loadWavButton.setBounds (347, 460, 90, 26);
     folderButton.setBounds  (445, 460, 90, 26);
+
+    // Milestone 11: the Scene box and the Load box, in the free corners at the top (the title is in the middle).
+    sceneBox.setBounds (20, 11, 226, 26);
+    loadBox.setBounds  (538, 11, 226, 26);
 
     display.setBounds (112, 526, 560, 126);
 
@@ -347,6 +364,186 @@ void CeoPanel::chooseHome()
     });
 }
 
+//==============================================================================
+// Milestone 11: Scenes
+namespace
+{
+    const char* const kLoadNames[4] = { "As the file says", "Layers only", "Scene (layers + settings)", "Settings only" };
+}
+
+void CeoPanel::updateSceneBoxes()
+{
+    const auto ss = processor.getSceneStatus();
+    const auto amber = juce::Colour (0xFFE0B050), red = juce::Colour (0xFFD9776F);
+    juce::String t = "Scene: ";
+    t << (ss.state == 0 ? juce::String ("none") : ss.name);
+    if (ss.state == 2) t << " (changed)";
+    if (ss.state == 3) t << " (missing)";
+    const auto colour = ss.state == 2 ? amber : ss.state == 3 ? red : CeoStyle::cream();
+    if (t != sceneBox.getText())
+        sceneBox.setText (t, juce::dontSendNotification);
+    if (colour != sceneBoxColour)
+    {
+        sceneBoxColour = colour;
+        sceneBox.setColour (juce::ComboBox::textColourId, colour);
+        sceneBox.repaint();
+    }
+    const auto l = juce::String ("Load: ") + kLoadNames[juce::jlimit (0, 3, processor.getLoadWhat())];
+    if (l != loadBox.getText())
+        loadBox.setText (l, juce::dontSendNotification);
+}
+
+void CeoPanel::showLoadMenu()
+{
+    juce::PopupMenu m;
+    for (int i = 0; i < 4; ++i)
+        m.addItem (i + 1, kLoadNames[i], true, processor.getLoadWhat() == i);
+    juce::Component::SafePointer<CeoPanel> self (this);
+    m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&loadBox), [self] (int r)
+    {
+        if (self != nullptr && r > 0)
+        {
+            self->processor.setLoadWhat (r - 1);
+            self->updateSceneBoxes();
+        }
+    });
+}
+
+void CeoPanel::showSceneMenu()
+{
+    const auto scenesFolder = processor.getScenesFolder();
+    const auto current = processor.getSceneFolder();
+    const auto scenes = ceo::scene::listScenes (scenesFolder.getFullPathName().toStdString());
+
+    juce::PopupMenu m;
+    juce::StringArray paths;
+    for (const auto& s : scenes)
+    {
+        const juce::File f (juce::String::fromUTF8 (s.c_str()));
+        paths.add (f.getFullPathName());
+        m.addItem (1 + paths.size() - 1, f.getFileName(), true, f == current);
+    }
+    if (paths.isEmpty())
+        m.addItem (999, "(no Scenes in the Scenes folder yet)", false, false);
+    m.addSeparator();
+    m.addItem (1000, "Browse for a Scene folder...");
+    m.addItem (1001, "Save Scene...");
+    m.addItem (1002, "Scenes folder...");
+    m.addItem (1003, "What the last load set and ignored...");
+
+    juce::Component::SafePointer<CeoPanel> self (this);
+    m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&sceneBox), [self, paths] (int r)
+    {
+        if (self == nullptr || r <= 0)
+            return;
+        if (r >= 1 && r <= paths.size())      self->beginSceneLoad (juce::File (paths[r - 1]));
+        else if (r == 1000)                   self->chooseSceneToLoad();
+        else if (r == 1001)                   self->startSaveScene();
+        else if (r == 1002)                   self->chooseScenesFolder();
+        else if (r == 1003)                   self->showSceneReport();
+    });
+}
+
+void CeoPanel::chooseSceneToLoad()
+{
+    auto start = processor.getScenesFolder();
+    if (! start.isDirectory())
+        start = processor.getHomeFolder();
+    chooser = std::make_unique<juce::FileChooser> ("Choose a Scene folder (a folder of WAV files, for example an Arbhar scene folder)", start, "");
+    chooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectDirectories,
+                          [this] (const juce::FileChooser& fc)
+    {
+        const auto d = fc.getResult();
+        if (d != juce::File() && d.isDirectory())
+            beginSceneLoad (d);
+    });
+}
+
+void CeoPanel::beginSceneLoad (const juce::File& folder)
+{
+    const auto plan = processor.planSceneLoad (folder);
+    if (! plan.ok)
+    {
+        showMessage (plan.message);
+        return;
+    }
+    if (plan.unsavedLayers.isEmpty())
+    {
+        finishSceneLoad (plan);
+        return;
+    }
+    const int n = plan.unsavedLayers.size();
+    const auto text = juce::String (n) + (n == 1 ? " layer (" : " layers (") + plan.unsavedLayers.joinIntoString (", ")
+                    + (n == 1 ? ") is not saved to a file and will be replaced." : ") are not saved to a file and will be replaced.")
+                    + "\n\n(A layer that has no file in a Scene stays as it is.)";
+    juce::Component::SafePointer<CeoPanel> self (this);
+    juce::AlertWindow::showAsync (juce::MessageBoxOptions().withIconType (juce::MessageBoxIconType::QuestionIcon)
+                                      .withTitle ("Load Scene " + folder.getFileName() + "?")
+                                      .withMessage (text)
+                                      .withButton ("Load")
+                                      .withButton ("Cancel"),
+                                  [self, plan] (int result)
+    {
+        if (result == 1 && self != nullptr)
+            self->finishSceneLoad (plan);
+    });
+}
+
+void CeoPanel::finishSceneLoad (const CeoAudioProcessor::ScenePlan& plan)
+{
+    const auto r = processor.runSceneLoad (plan);
+    showMessage (r.message);
+    updateSceneBoxes();
+}
+
+void CeoPanel::startSaveScene()
+{
+    auto start = processor.getScenesFolder();
+    start.createDirectory();
+    chooser = std::make_unique<juce::FileChooser> ("Save Scene: choose or make a folder. Files already in it are renamed (_was_...), never deleted.", start, "");
+    chooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectDirectories,
+                          [this] (const juce::FileChooser& fc)
+    {
+        const auto d = fc.getResult();
+        if (d == juce::File() || ! d.isDirectory())
+            return;
+        juce::String why;
+        if (processor.startSceneSave (d, why))
+            showMessage ("Saving Scene " + d.getFileName() + "...");
+        else
+            showMessage (why);
+    });
+}
+
+void CeoPanel::chooseScenesFolder()
+{
+    auto start = processor.getScenesFolder();
+    if (! start.isDirectory())
+        start = processor.getHomeFolder();
+    chooser = std::make_unique<juce::FileChooser> ("Choose the Scenes folder (the Scene menu lists the folders inside it)", start, "");
+    chooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectDirectories,
+                          [this] (const juce::FileChooser& fc)
+    {
+        const auto d = fc.getResult();
+        if (d == juce::File() || ! d.isDirectory())
+            return;
+        processor.setScenesFolder (d);
+        showMessage ("Scenes folder set.");
+    });
+}
+
+void CeoPanel::showSceneReport()
+{
+    auto r = processor.getSceneReport();
+    if (r.isEmpty())
+        r = "No Scene has been loaded yet in this session.";
+    juce::AlertWindow::showAsync (juce::MessageBoxOptions().withIconType (juce::MessageBoxIconType::InfoIcon)
+                                      .withTitle ("What the last Scene load did")
+                                      .withMessage (r)
+                                      .withButton ("OK"),
+                                  nullptr);
+}
+
 void CeoPanel::updateFileStrip()
 {
     using namespace CeoStyle;
@@ -396,6 +593,13 @@ void CeoPanel::updateFileStrip()
     if (recording && ! isOmega && ! busy)
         a = layerName (layer) + "  recording...";
 
+    {
+        const auto done = processor.takeSceneMessage();          // a Scene save that has just finished
+        if (done.isNotEmpty())
+            showMessage (done);
+    }
+    if (messageTicks == 0 && ! busy && processor.getSceneStatus().state == 3)
+        b = "Put the Scene folder back, or point Scene at it";
     if (messageTicks > 0)
     {
         --messageTicks;
@@ -408,6 +612,8 @@ void CeoPanel::updateFileStrip()
     const bool canUse = ! isOmega && ! recording && ! anyBusy && ready;
     saveWavButton.setEnabled (canUse && engine.layerState (juce::jmin (layer, ceo::kNumLayers - 1)) == ceo::Engine::LayerFilled);
     loadWavButton.setEnabled (canUse);
+    sceneBox.setEnabled (! recording && ! anyBusy && ready);
+    updateSceneBoxes();
 
     if (a != statusA || b != statusB || colour != statusColour)
     {

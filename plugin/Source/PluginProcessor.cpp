@@ -15,6 +15,18 @@ namespace
         return std::make_unique<juce::PropertiesFile> (o);
     }
 
+    juce::String readSetting (const char* key)
+    {
+        if (auto s = openSettings()) return s->getValue (key);
+        return {};
+    }
+    void writeSetting (const char* key, const juce::String& value)
+    {
+        if (auto s = openSettings()) { s->setValue (key, value); s->saveIfNeeded(); }
+    }
+
+    const char* const kLayerWords[ceo::kNumLayers] = { "alpha", "beta", "gamma", "delta", "epsilon", "zeta" };
+
     juce::File loadHomeFolder()
     {
         if (auto s = openSettings())
@@ -35,6 +47,12 @@ CeoAudioProcessor::CeoAudioProcessor()
 {
     homeFolder = loadHomeFolder();
     library.setHomeFolder (homeFolder.getFullPathName().toStdString());
+    {
+        const auto sf = readSetting ("scenesFolder");
+        scenesFolder = sf.isNotEmpty() ? juce::File (sf)
+                                       : juce::File::getSpecialLocation (juce::File::userMusicDirectory).getChildFile ("Unofficial Ceo").getChildFile ("Scenes");
+        loadWhat = juce::jlimit (0, 3, readSetting ("loadWhat").getIntValue());
+    }
     startTimerHz (10);
 }
 
@@ -58,6 +76,225 @@ void CeoAudioProcessor::setHomeFolder (const juce::File& f)
 void CeoAudioProcessor::timerCallback()
 {
     library.tick();
+
+    ceo::LayerLibrary::SceneSaved done;
+    if (library.takeSceneSaved (done))
+    {
+        juce::String layers;
+        for (int l : done.layers) layers << juce::String (l + 1);
+        if (done.ok)
+            setSceneLink (juce::File (juce::String::fromUTF8 (done.folder.c_str())), layers);
+        const juce::ScopedLock sl (sceneLock);
+        sceneMessage = juce::String::fromUTF8 (done.message.c_str());
+    }
+}
+
+//==============================================================================
+// Milestone 11: Scenes
+void CeoAudioProcessor::setScenesFolder (const juce::File& f)
+{
+    scenesFolder = f;
+    writeSetting ("scenesFolder", f.getFullPathName());
+}
+
+void CeoAudioProcessor::setLoadWhat (int w)
+{
+    loadWhat = juce::jlimit (0, 3, w);
+    writeSetting ("loadWhat", juce::String (loadWhat));
+}
+
+void CeoAudioProcessor::setSceneLink (const juce::File& folder, const juce::String& mask)
+{
+    const juce::ScopedLock sl (sceneLock);
+    sceneFolder = folder;
+    sceneMask = mask;
+}
+
+juce::String CeoAudioProcessor::takeSceneMessage()
+{
+    const juce::ScopedLock sl (sceneLock);
+    auto m = sceneMessage;
+    sceneMessage.clear();
+    return m;
+}
+
+juce::String CeoAudioProcessor::getSceneReport() const
+{
+    const juce::ScopedLock sl (sceneLock);
+    return sceneReport;
+}
+
+CeoAudioProcessor::SceneStatus CeoAudioProcessor::getSceneStatus() const
+{
+    juce::File folder; juce::String mask;
+    {
+        const juce::ScopedLock sl (sceneLock);
+        folder = sceneFolder; mask = sceneMask;
+    }
+    SceneStatus s;
+    if (folder == juce::File())
+        return s;
+    s.name = folder.getFileName();
+    if (! folder.isDirectory()) { s.state = 3; return s; }
+    s.state = 1;
+    for (int i = 0; i < ceo::kNumLayers; ++i)
+    {
+        if (! mask.containsChar ((juce::juce_wchar) ('1' + i)))
+            continue;
+        const auto info = library.info (i);
+        if (info.status == ceo::LayerLibrary::Waiting || info.status == ceo::LayerLibrary::Working)
+            continue;                                   // still loading or saving: not a change
+        if (! info.bound || juce::File (juce::String::fromUTF8 (info.fullPath.c_str())).getParentDirectory() != folder)
+            s.state = 2;
+    }
+    return s;
+}
+
+ceo::scene::Settings CeoAudioProcessor::currentSettings() const
+{
+    auto idx = [this] (const char* id) { return (int) (apvts.getRawParameterValue (id)->load() + 0.5f); };
+    ceo::scene::Settings s;
+    s.inputMode = idx (CeoParams::inputMode);
+    s.modTarget = idx (CeoParams::modTarget);
+    s.follow = idx (CeoParams::follow);
+    s.onsetCapture = idx (CeoParams::onsetCapture);
+    s.pitchSnap = idx (CeoParams::pitchSnap);
+    s.pitchScale = idx (CeoParams::pitchScale);
+    return s;
+}
+
+void CeoAudioProcessor::applySettings (const ceo::scene::Settings& s)
+{
+    auto set = [this] (const char* id, int index)
+    {
+        if (index < 0) return;
+        if (auto* p = apvts.getParameter (id))
+        {
+            p->beginChangeGesture();
+            p->setValueNotifyingHost (p->convertTo0to1 ((float) index));
+            p->endChangeGesture();
+        }
+    };
+    set (CeoParams::inputMode, s.inputMode);
+    set (CeoParams::modTarget, s.modTarget);
+    set (CeoParams::follow, s.follow);
+    set (CeoParams::onsetCapture, s.onsetCapture);
+    set (CeoParams::pitchSnap, s.pitchSnap);
+    set (CeoParams::pitchScale, s.pitchScale);
+}
+
+CeoAudioProcessor::ScenePlan CeoAudioProcessor::planSceneLoad (const juce::File& folder)
+{
+    ScenePlan p;
+    p.folder = folder;
+    if (! folder.isDirectory()) { p.message = "That Scene folder isn't there."; return p; }
+    p.files = ceo::scene::scanFolder (folder.getFullPathName().toStdString());
+    if (! p.files.settingsFile.empty())
+        p.preset = ceo::scene::loadPresetFile (p.files.settingsFile);
+    p.what = (ceo::scene::LoadWhat) loadWhat;
+    p.decision = ceo::scene::decide (p.what, p.files, p.preset);
+    if (! p.decision.layers && ! p.decision.settings)
+    {
+        p.message = folder.getFileName() + ": " + juce::String::fromUTF8 ((p.decision.note.empty() ? std::string ("Nothing to load.") : p.decision.note).c_str());
+        return p;
+    }
+    p.ok = true;
+    if (p.decision.layers)
+        for (int i = 0; i < ceo::kNumLayers; ++i)
+            if (! p.files.audio[i].empty() && library.info (i).unsaved)
+                p.unsavedLayers.add (kLayerWords[i]);
+    return p;
+}
+
+CeoAudioProcessor::SceneResult CeoAudioProcessor::runSceneLoad (const ScenePlan& plan)
+{
+    SceneResult r;
+    const auto name = plan.folder.getFileName();
+    juce::String mask;
+    int count = 0;
+    juce::String report = "Scene: " + name + "\n";
+
+    if (plan.decision.layers)
+    {
+        std::vector<std::pair<int, std::string>> list;
+        for (int i = 0; i < ceo::kNumLayers; ++i)
+            if (! plan.files.audio[i].empty()) { list.push_back ({ i, plan.files.audio[i] }); mask << juce::String (i + 1); ++count; }
+        std::string why;
+        if (! library.loadMany (list, why))
+        {
+            r.message = juce::String::fromUTF8 (why.c_str());
+            return r;                                   // nothing was loaded, nothing was changed
+        }
+        report << "\nLayers loaded (" << juce::String (count) << "):\n";
+        for (const auto& [l, f] : list)
+            report << "  " << kLayerWords[l] << ": " << juce::File (juce::String::fromUTF8 (f.c_str())).getFileName() << "\n";
+    }
+    else
+        report << "\nLayers: not loaded.\n";
+
+    juce::String shortMsg;
+    if (plan.decision.layers)
+        shortMsg << juce::String (count) << (count == 1 ? " layer" : " layers") << " loaded. ";
+
+    const bool usable = plan.preset.valid && plan.preset.s.any();
+    if (plan.decision.settings)
+    {
+        applySettings (plan.preset.s);
+        report << "\nSettings from " << juce::File (juce::String::fromUTF8 (plan.files.settingsFile.c_str())).getFileName()
+               << (plan.preset.name.empty() ? juce::String() : " (\"" + juce::String::fromUTF8 (plan.preset.name.c_str()) + "\")") << ":\n";
+        juce::StringArray brief;
+        for (const auto& line : plan.preset.set)
+        {
+            const auto t = juce::String::fromUTF8 (line.c_str());
+            report << "  Set: " << t << "\n";
+            brief.add (t.upToFirstOccurrenceOf (" (", false, false).replace (": ", " ").replace ("Input mode ", "Input ").replace ("Onset capture ", "Onset ")
+                                                                                .replace ("Follow mode ", "Follow ").replace ("Pitch Scale ", "Scale ").replace ("Pitch Snap ", "Snap "));
+        }
+        shortMsg << "Set: " << brief.joinIntoString (", ");
+        const int ignored = (int) plan.preset.ignored.size();
+        if (ignored > 0)
+        {
+            shortMsg << ". " << juce::String (ignored) << " ignored.";
+            report << "\nIgnored (Ceo has no setting for these, " << juce::String (ignored) << "):\n  ";
+            for (size_t i = 0; i < plan.preset.ignored.size(); ++i)
+                report << juce::String::fromUTF8 (plan.preset.ignored[i].c_str()) << (i + 1 < plan.preset.ignored.size() ? ", " : "");
+            report << "\n";
+        }
+        for (const auto& n : plan.preset.notes)
+            report << "\nNote: " << juce::String::fromUTF8 (n.c_str()) << "\n";
+        const int effInput = plan.preset.s.inputMode >= 0 ? plan.preset.s.inputMode : currentSettings().inputMode;
+        if (plan.preset.s.onsetCapture == 1 && effInput == 1)
+            report << "\nNote: Onset capture is on, but it only works with the Mono input mode (Input mode is Stereo).\n";
+    }
+    else if (usable || ! plan.files.settingsFile.empty())
+    {
+        const juce::String why = plan.what == ceo::scene::LayersOnly ? "Load is set to Layers only"
+                               : (plan.what == ceo::scene::AsFileSays && plan.preset.loadConfiguration == 2) ? "the file says layers only"
+                               : "see the Load menu";
+        shortMsg << "Settings not loaded (" << why << ").";
+        report << "\nSettings: not loaded (" << why << ").\n";
+    }
+
+    setSceneLink (plan.folder, mask);
+    {
+        const juce::ScopedLock sl (sceneLock);
+        sceneReport = report;
+    }
+    r.ok = true;
+    r.message = shortMsg;
+    return r;
+}
+
+bool CeoAudioProcessor::startSceneSave (const juce::File& folder, juce::String& whyNot)
+{
+    const auto settings = ceo::scene::writeCeoSettings (folder.getFileName().toStdString(), currentSettings());
+    std::string why;
+    if (! library.saveScene (folder.getFullPathName().toStdString(), settings, why))
+    {
+        whyNot = juce::String::fromUTF8 (why.c_str());
+        return false;
+    }
+    return true;
 }
 
 void CeoAudioProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
@@ -174,6 +411,19 @@ void CeoAudioProcessor::getStateInformation (juce::MemoryBlock& destData)
                 e->setAttribute ("hash", juce::String::toHexString ((juce::int64) b.hash));
             }
         }
+        {
+            juce::File folder; juce::String mask;
+            {
+                const juce::ScopedLock sl (sceneLock);
+                folder = sceneFolder; mask = sceneMask;
+            }
+            if (folder != juce::File())
+            {
+                auto* e = xml->createNewChildElement ("SCENE");
+                e->setAttribute ("path", folder.isAChildOf (scenesFolder) ? folder.getRelativePathFrom (scenesFolder) : folder.getFullPathName());
+                e->setAttribute ("layers", mask);
+            }
+        }
         copyXmlToBinary (*xml, destData);
     }
 }
@@ -198,8 +448,18 @@ void CeoAudioProcessor::setStateInformation (const void* data, int sizeInBytes)
                 }
                 xml->removeChildElement (node, true);
             }
+            juce::File linked; juce::String linkedMask;
+            if (auto* node = xml->getChildByName ("SCENE"))          // absent in projects saved before milestone 11
+            {
+                const auto path = node->getStringAttribute ("path");
+                if (path.isNotEmpty())
+                    linked = juce::File::isAbsolutePath (path) ? juce::File (path) : scenesFolder.getChildFile (path);
+                linkedMask = node->getStringAttribute ("layers");
+                xml->removeChildElement (node, true);
+            }
             apvts.replaceState (juce::ValueTree::fromXml (*xml));
             library.restore (refs);
+            setSceneLink (linked, linkedMask);                       // the settings are NOT applied again: the project has its own
         }
 }
 

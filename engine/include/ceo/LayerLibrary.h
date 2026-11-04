@@ -33,6 +33,7 @@ public:
         bool unsaved = false;       // the layer holds audio that no file has
         Status status = NotBound;
         std::string fileName;       // just the name of the file
+        std::string fullPath;       // where that file is now (absolute)
         std::string message;        // a short sentence for the status line ("saved", "missing: ...")
     };
 
@@ -45,6 +46,17 @@ public:
     bool saveLayer (int layer, const std::string& file, std::string& whyNot);
     // Load a WAV file into a layer and bind the layer to it. The file is read now; the hand-over to the audio thread finishes in tick().
     bool loadLayer (int layer, const std::string& file, std::string& whyNot);
+    // Load several files at once (a Scene). Every file is read and checked first: if any one fails, nothing is loaded and 'whyNot' says which.
+    // Layers not listed are left alone.
+    bool loadMany (const std::vector<std::pair<int, std::string>>& files, std::string& whyNot);
+
+    // Save a Scene: every layer that holds audio goes to <folder>/<n>_<name>.wav, plus the settings text as "Ceo scene.txt".
+    // Nothing is deleted: files already in the folder are renamed to "_was_<date>_<name>" once all the audio has been collected, and the new files
+    // are written under temporary names first, so a failure leaves the folder as it was. Finished by tick(); the result comes from takeSceneSaved().
+    bool saveScene (const std::string& folder, const std::string& settingsText, std::string& whyNot);
+    struct SceneSaved { bool ok = false; std::string folder; std::string message; std::vector<int> layers; };
+    bool takeSceneSaved (SceneSaved& out);      // true once, when a Scene save has finished (or failed)
+
     // Forget the file of a layer (the audio stays).
     void unbind (int layer);
 
@@ -88,7 +100,22 @@ private:
         bool changed = false;
     };
 
+    struct SceneJob
+    {
+        bool active = false;
+        std::string folder, settingsText;
+        std::vector<int> layers;                    // the layers being saved
+        std::vector<LayerAudio> audio;              // collected so far
+        std::vector<uint32_t> rev, edit;
+        size_t next = 0;
+        int stage = 0, attempts = 0;
+    };
+    void stepScene();
+    void finishScene (bool ok, const std::string& message);
+
     Engine& engine;
+    SceneJob scene;
+    SceneSaved sceneDone; bool sceneDoneReady = false;
     mutable std::mutex m;
     std::string home;
     Slot slots[kNumLayers];

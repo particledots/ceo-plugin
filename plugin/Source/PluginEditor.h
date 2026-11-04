@@ -12,6 +12,35 @@
 #include <memory>
 #include <vector>
 
+// A box that looks like a drop-down but builds its own menu (the Scene menu and the Load menu).
+class MenuBox : public juce::ComboBox
+{
+public:
+    std::function<void()> onShowPopup;
+
+    // The base class keeps a private "menu is open" flag that only its own popup resets, so we handle the mouse and keys ourselves.
+    void showPopup() override { if (onShowPopup) onShowPopup(); }
+    void mouseDown (const juce::MouseEvent& e) override
+    {
+        if (! isEnabled() || e.mods.isPopupMenu())
+            return;
+        juce::Component::SafePointer<MenuBox> self (this);
+        juce::MessageManager::callAsync ([self] { if (self != nullptr && self->onShowPopup) self->onShowPopup(); });
+    }
+    void mouseUp (const juce::MouseEvent&) override {}
+    void mouseDrag (const juce::MouseEvent&) override {}
+    void mouseWheelMove (const juce::MouseEvent&, const juce::MouseWheelDetails&) override {}
+    bool keyPressed (const juce::KeyPress& k) override
+    {
+        if (k == juce::KeyPress::returnKey || k == juce::KeyPress::spaceKey)
+        {
+            if (onShowPopup) onShowPopup();
+            return true;
+        }
+        return false;
+    }
+};
+
 // Everything on the panel, laid out in a fixed 784 x 672 space (milestone 7: squarer layout). The editor scales it to the window size.
 class CeoPanel : public juce::Component, private juce::Timer
 {
@@ -58,6 +87,17 @@ private:
     void showMessage (const juce::String&);
     int  selectedLayer() const;
 
+    // Milestone 11: Scenes. The Scene box (top left) and the Load box (top right).
+    void showSceneMenu();
+    void showLoadMenu();
+    void beginSceneLoad (const juce::File& folder);
+    void finishSceneLoad (const CeoAudioProcessor::ScenePlan&);
+    void chooseSceneToLoad();
+    void startSaveScene();
+    void chooseScenesFolder();
+    void showSceneReport();
+    void updateSceneBoxes();
+
     // The two knob blocks (left: record and output, right: the grains), two columns each.
     static constexpr int kLeftColumn0  = 70,  kLeftColumn1  = 170;
     static constexpr int kRightColumn0 = kWidth - 170, kRightColumn1 = kWidth - 70;
@@ -83,6 +123,8 @@ private:
     juce::TextButton captureButton, onsetButton, strikeButton, eraseButton, undoButton, followButton;
     juce::ComboBox inputModeBox, modTargetBox, pitchSnapBox, pitchScaleBox;
     juce::TextButton saveWavButton, loadWavButton, folderButton;
+    MenuBox sceneBox, loadBox;
+    juce::Colour sceneBoxColour;
     std::unique_ptr<juce::FileChooser> chooser;
     juce::String statusA, statusB;
     juce::Colour statusColour;

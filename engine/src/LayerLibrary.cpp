@@ -152,6 +152,183 @@ bool LayerLibrary::loadLayer (int layer, const std::string& file, std::string& w
     return true;
 }
 
+bool LayerLibrary::loadMany (const std::vector<std::pair<int, std::string>>& files, std::string& whyNot)
+{
+    std::lock_guard<std::mutex> g (m);
+    if (files.empty()) { whyNot = "There are no files to load."; return false; }
+    if (scene.active) { whyNot = "A Scene is being saved - try again in a moment."; return false; }
+    if (engine.anyLayerRecording()) { whyNot = "A recording is running - stop it first (Capture), then load."; return false; }
+    std::vector<Job> jobs;
+    bool seen[kNumLayers] = {};
+    for (const auto& [layer, file] : files)
+    {
+        if (layer < 0 || layer >= kNumLayers || seen[layer]) { whyNot = "Internal error: bad layer list."; return false; }
+        seen[layer] = true;
+        if (slots[layer].queued) { whyNot = "Layer " + std::string (kLayerNames[layer]) + " is busy - try again in a moment."; return false; }
+        std::vector<uint8_t> bytes;
+        if (! readFile (file, bytes)) { whyNot = "Couldn't read " + nameOf (file) + " (or it is over 300 MB). Nothing was loaded."; return false; }
+        Job j; j.type = Job::Load; j.layer = layer; j.path = file;
+        std::string err;
+        if (! readWav (bytes.data(), bytes.size(), j.audio, err)) { whyNot = nameOf (file) + ": " + err + " Nothing was loaded."; return false; }
+        j.hash = hashBytes (bytes.data(), bytes.size()); j.size = bytes.size(); j.chosen = file; j.stage = 1;
+        jobs.push_back (std::move (j));
+    }
+    for (auto& j : jobs)
+    {
+        slots[j.layer].status = Working; slots[j.layer].message = "loading...";
+        enqueue (std::move (j));
+    }
+    return true;
+}
+
+bool LayerLibrary::saveScene (const std::string& folder, const std::string& settingsText, std::string& whyNot)
+{
+    std::lock_guard<std::mutex> g (m);
+    if (folder.empty()) { whyNot = "Pick a folder first."; return false; }
+    if (scene.active || ! queue.empty()) { whyNot = "Ceo is still busy with a save or load - try again in a moment."; return false; }
+    if (engine.anyLayerRecording()) { whyNot = "A recording is running - stop it first (Capture), then save the Scene."; return false; }
+    SceneJob j;
+    for (int i = 0; i < kNumLayers; ++i) if (engine.layerState (i) == Engine::LayerFilled) j.layers.push_back (i);
+    if (j.layers.empty()) { whyNot = "No layer holds audio - there is nothing to save."; return false; }
+    j.active = true; j.folder = folder; j.settingsText = settingsText;
+    for (int i : j.layers) { slots[i].queued = true; slots[i].status = Working; slots[i].message = "saving scene..."; }
+    scene = std::move (j);
+    return true;
+}
+
+bool LayerLibrary::takeSceneSaved (SceneSaved& out)
+{
+    std::lock_guard<std::mutex> g (m);
+    if (! sceneDoneReady) return false;
+    out = sceneDone; sceneDoneReady = false;
+    return true;
+}
+
+void LayerLibrary::finishScene (bool ok, const std::string& message)
+{
+    for (int i : scene.layers) slots[i].queued = false;
+    sceneDone = SceneSaved(); sceneDone.ok = ok; sceneDone.folder = scene.folder; sceneDone.message = message;
+    if (ok) sceneDone.layers = scene.layers;
+    sceneDoneReady = true;
+    scene = SceneJob();
+}
+
+void LayerLibrary::stepScene()
+{
+    SceneJob& j = scene;
+    // 1. collect the audio, one layer after another (the engine has a single export slot)
+    if (j.next < j.layers.size())
+    {
+        const int layer = j.layers[j.next];
+        if (j.stage == 0)
+        {
+            if (engine.requestExport (layer)) { j.stage = 1; j.attempts = 0; }
+            else if (++j.attempts > 3000) { for (int i : j.layers) { slots[i].status = Failed; slots[i].message = "scene not saved"; } finishScene (false, "Ceo couldn't get the audio out (is Logic playing?). Nothing was changed."); }
+            return;
+        }
+        LayerAudio a;
+        const auto r = engine.pollExport (a);
+        if (r == Engine::IoNone)
+        {
+            if (++j.attempts > 3000) { for (int i : j.layers) { slots[i].status = Failed; slots[i].message = "scene not saved"; } finishScene (false, "The audio never answered (press Play if Logic is stopped). Nothing was changed."); }
+            else if (j.attempts == 30) slots[layer].message = "waiting for audio to run (press Play if Logic is stopped)...";
+            return;
+        }
+        if (r == Engine::ExportEmpty) { for (int i : j.layers) { slots[i].status = slots[i].bound ? Ok : NotBound; slots[i].message.clear(); } finishScene (false, "A layer was emptied while saving. Nothing was changed."); return; }
+        j.audio.push_back (std::move (a));
+        j.rev.push_back (engine.exportedRevision()); j.edit.push_back (engine.exportedEditCount());
+        ++j.next; j.stage = 0; j.attempts = 0;
+        return;
+    }
+
+    // 2. everything is in memory: write the new files under temporary names first
+    std::error_code ec;
+    const fs::path dir (j.folder);
+    fs::create_directories (dir, ec);
+    auto cleanup = [&] (const std::vector<fs::path>& tmps) { std::error_code e; for (const auto& t : tmps) fs::remove (t, e); };
+    std::vector<fs::path> tmps, finals;
+    std::vector<std::vector<uint8_t>> wavs;
+    bool ok = fs::is_directory (dir, ec);
+    for (size_t k = 0; k < j.layers.size() && ok; ++k)
+    {
+        const std::string name = std::to_string (j.layers[k] + 1) + "_" + kLayerNames[j.layers[k]] + ".wav";
+        wavs.push_back (writeWav16 (j.audio[k]));
+        const fs::path tmp = dir / (name + ".ceo-tmp");
+        std::ofstream f (tmp, std::ios::binary | std::ios::trunc);
+        if (f) f.write (reinterpret_cast<const char*> (wavs.back().data()), (std::streamsize) wavs.back().size());
+        const bool good = f && f.good();
+        f.close();
+        tmps.push_back (tmp); finals.push_back (dir / name);
+        ok = good;
+    }
+    if (ok)
+    {
+        const fs::path tmp = dir / "Ceo scene.txt.ceo-tmp";
+        std::ofstream f (tmp, std::ios::binary | std::ios::trunc);
+        if (f) f << j.settingsText;
+        ok = f && f.good();
+        f.close();
+        tmps.push_back (tmp); finals.push_back (dir / "Ceo scene.txt");
+    }
+    if (! ok)
+    {
+        cleanup (tmps);
+        for (int i : j.layers) { slots[i].status = Failed; slots[i].message = "scene not saved"; }
+        finishScene (false, "Couldn't write into " + nameOf (j.folder) + " (is the folder writable?). Nothing was changed.");
+        return;
+    }
+
+    // 3. rename what was there (audio files, and an older Ceo scene.txt); Arbhar's own .txt stays untouched
+    const std::time_t t = std::time (nullptr);
+    std::tm tmv {};
+#ifdef _WIN32
+    localtime_s (&tmv, &t);
+#else
+    localtime_r (&t, &tmv);
+#endif
+    char stamp[32];
+    std::snprintf (stamp, sizeof stamp, "%04d%02d%02d-%02d%02d", tmv.tm_year + 1900, tmv.tm_mon + 1, tmv.tm_mday, tmv.tm_hour, tmv.tm_min);
+    int renamed = 0;
+    std::vector<fs::path> olds;
+    for (fs::directory_iterator it (dir, fs::directory_options::skip_permission_denied, ec), end; ! ec && it != end; it.increment (ec))
+    {
+        std::error_code e2;
+        if (! it->is_regular_file (e2)) continue;
+        const std::string name = it->path().filename().string();
+        if (name.empty() || name[0] == '.' || name.rfind ("_was_", 0) == 0) continue;
+        if (lowerExt (it->path()) == ".wav" || name == "Ceo scene.txt") olds.push_back (it->path());
+    }
+    for (const auto& o : olds)
+    {
+        const std::string base = o.filename().string();
+        fs::path target;
+        for (int n = 0; n < 1000; ++n)
+        {
+            target = dir / (std::string ("_was_") + stamp + (n ? "_" + std::to_string (n + 1) : std::string()) + "_" + base);
+            std::error_code e3;
+            if (! fs::exists (target, e3)) break;
+        }
+        std::error_code e4;
+        fs::rename (o, target, e4);
+        if (e4) { cleanup (tmps); for (int i : j.layers) { slots[i].status = Failed; slots[i].message = "scene not saved"; }
+                  finishScene (false, "Couldn't rename the existing file " + base + ". The new files were not written."); return; }
+        ++renamed;
+    }
+
+    // 4. the new files take their real names
+    for (size_t k = 0; k < tmps.size(); ++k)
+    {
+        std::error_code e5;
+        fs::rename (tmps[k], finals[k], e5);
+        if (e5) { cleanup (tmps); for (int i : j.layers) { slots[i].status = Failed; slots[i].message = "scene not saved"; }
+                  finishScene (false, "Couldn't finish writing " + finals[k].filename().string() + ". Your older files were renamed to _was_... in the same folder."); return; }
+    }
+    for (size_t k = 0; k < j.layers.size(); ++k)
+        bindSlot (j.layers[k], finals[k].string(), hashBytes (wavs[k].data(), wavs[k].size()), wavs[k].size(), j.rev[k], j.edit[k], Ok, "saved " + finals[k].filename().string());
+    finishScene (true, "Scene saved: " + std::to_string (j.layers.size()) + " WAV files and Ceo scene.txt in " + nameOf (j.folder)
+                         + (renamed ? " (" + std::to_string (renamed) + " older file" + (renamed == 1 ? "" : "s") + " renamed to _was_...)" : ""));
+}
+
 void LayerLibrary::unbind (int layer)
 {
     std::lock_guard<std::mutex> g (m);
@@ -211,11 +388,12 @@ LayerLibrary::LayerInfo LayerLibrary::info (int layer) const
     const Slot& s = slots[layer];
     r.bound = s.bound; r.status = s.status; r.message = s.message;
     r.fileName = s.bound ? nameOf (s.b.path) : std::string();
+    r.fullPath = s.bound ? toAbsolute (s.b.path) : std::string();
     r.unsaved = ! s.bound && engine.layerState (layer) == Engine::LayerFilled;
     return r;
 }
 
-bool LayerLibrary::busy() const { std::lock_guard<std::mutex> g (m); return ! queue.empty(); }
+bool LayerLibrary::busy() const { std::lock_guard<std::mutex> g (m); return ! queue.empty() || scene.active; }
 
 std::string LayerLibrary::suggestedFileName (int layer) const
 {
@@ -317,6 +495,8 @@ void LayerLibrary::tick()
             queue.pop_front();
         }
     }
+
+    if (scene.active) stepScene();
 
     // 2. bound layers whose audio changed under them
     for (int i = 0; i < kNumLayers; ++i)

@@ -10,6 +10,7 @@ add_library(ceo_engine STATIC
     src/Wavetable.cpp
     src/LayerAudio.cpp
     src/LayerLibrary.cpp
+    src/Scene.cpp
 )
 
 target_include_directories(ceo_engine PUBLIC include)
@@ -27,4 +28,12 @@ if(CEO_BUILD_TESTS)
         CEO_ENGINE_CPP="${CMAKE_CURRENT_SOURCE_DIR}/src/Engine.cpp"
         CEO_ENGINE_H="${CMAKE_CURRENT_SOURCE_DIR}/include/ceo/Engine.h")
     add_test(NAME library COMMAND ceo_library_test)
+
+    add_executable(ceo_scene_test tests/scene_test.cpp)
+    target_link_libraries(ceo_scene_test PRIVATE ceo_engine Threads::Threads)
+    target_compile_definitions(ceo_scene_test PRIVATE
+        CEO_ENGINE_CPP="${CMAKE_CURRENT_SOURCE_DIR}/src/Engine.cpp"
+        CEO_SCENE_H="${CMAKE_CURRENT_SOURCE_DIR}/include/ceo/Scene.h"
+        CEO_SCENE_CPP="${CMAKE_CURRENT_SOURCE_DIR}/src/Scene.cpp")
+    add_test(NAME scene COMMAND ceo_scene_test)
 endif()

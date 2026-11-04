@@ -10,6 +10,30 @@ about 12% of one core on average and at most about a third of a block's time for
 was left exactly as it was. The build now also runs pluginval on the AU and the VST3 (results are in the package as
 `pluginval-AU.log` and `pluginval-VST3.log`).
 
+Version 0.11.0 (milestone 11, waiting for a test in Logic): **Scenes**. A Scene is a folder of up to six WAV files (one per
+layer, α to ζ) plus a settings file, like the Arbhar's scene folders.
+
+- Two boxes in the top corners. **Scene** (left): the Scenes in your Scenes folder, *Browse for a Scene folder...*,
+  *Save Scene...*, *Scenes folder...* and *What the last load set and ignored...*. **Load** (right): *As the file says*,
+  *Layers only*, *Scene (layers + settings)* or *Settings only*. Both are remembered per computer.
+- Layer order: if any file name starts with a digit 1 to 6, that digit picks the layer; otherwise the first six audio files
+  in alphabetical order go to α to ζ (as the Arbhar does). Hidden files and `_was_` files are skipped. A layer with no file
+  in the Scene keeps what it had. All files are checked first: if one cannot be read, nothing is loaded.
+- A real Arbhar scene folder loads (for example `4_4_scene`: six 13 s, 48 kHz, 24-bit stereo files and `MidSide.txt`).
+  The `#ARB` file is read tolerantly (only `PARAMETER:` and `PRESET_NAME:` lines count; the damaged comment blocks in the
+  real files do not matter). *As the file says* follows its Load Configuration (0 nothing, 1 settings only, 2 layers only,
+  3 both); the Load box overrides it. Taken from a preset: InputMode, ModCV (Panning, Hold, Reverb, Delay), FollowMode,
+  OnsetMode (alpha/beta turn Onset capture on) and the QuantiseTable (nearest Pitch Scale, named in the report). Everything
+  else is listed as ignored.
+- *Save Scene...* writes `1_alpha.wav` to `6_zeta.wav` (only layers that hold audio, 16-bit) and `Ceo scene.txt`.
+  Nothing is deleted: files already in the folder are renamed to `_was_<date>_<name>`, after all the audio has been
+  collected and the new files written under temporary names. Arbhar's own `.txt` file is left alone.
+- A Logic project stores a link to the Scene folder (relative to the Scenes folder when inside it) next to the per-layer
+  links. The panel shows "(changed)" in amber when a layer is no longer the Scene's file, "(missing)" in red when the
+  folder is gone. Opening a project does not re-apply the Scene's settings.
+- If a Scene would replace layers that are not saved to a file, a question is asked first.
+- No new parameters; all 26 ids unchanged; the audio engine is unchanged.
+
 Version 0.10.0 (milestone 10, waiting for a test in Logic): **SAVE WAV, LOAD WAV and FOLDER...** for the six layers
 (α to ζ), under Capture and Strike, with two status lines.
 
