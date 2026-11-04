@@ -158,6 +158,8 @@ struct Engine::Impl
     // Button states from the previous block (to spot clicks)
     bool prevCapture = false, prevStrike = false, prevErase = false, prevUndo = false, prevFollow = false;
     bool primed      = false;                   // false until the first block after a reset
+    int  fadeLeft    = 0;                       // samples of the short fade-in after a soft restart
+    int  fadeTotal   = 1;
     bool prepared    = false;                   // true once prepare() has done the full set-up at least once
 
     // Follow mode playhead (in samples from the start of the layer, or of alpha in Omega)
@@ -232,6 +234,10 @@ void Engine::prepare (double newSampleRate, int newMaxBlockSize, int numChannels
         s.ringPos      = 0;
         s.holdLeft     = 0.0;
         s.prevOnsetOn  = false;
+        // The host's output was silent while stopped, so what carries on would start with a step from zero:
+        // fade it in over 15 ms (the sound that keeps playing is otherwise untouched).
+        s.fadeTotal    = std::max (1, (int) std::lround (0.015 * sampleRate));
+        s.fadeLeft     = s.fadeTotal;
         return;
     }
 
@@ -1163,14 +1169,21 @@ void Engine::process (float* const* channels, int numChannels, int numSamples)
         }
 
         // ---- Output ----
+        float fadeG = s.outG;
+        if (s.fadeLeft > 0)
+        {
+            const float t = 1.0f - (float) s.fadeLeft / (float) s.fadeTotal;
+            fadeG *= t * t * (3.0f - 2.0f * t);
+            --s.fadeLeft;
+        }
         if (nCh == 1)
         {
-            channels[0][i] = 0.5f * (outL + outR) * s.outG;
+            channels[0][i] = 0.5f * (outL + outR) * fadeG;
         }
         else
         {
-            channels[0][i] = outL * s.outG;
-            channels[1][i] = outR * s.outG;
+            channels[0][i] = outL * fadeG;
+            channels[1][i] = outR * fadeG;
         }
     }
 

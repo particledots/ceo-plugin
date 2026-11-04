@@ -1402,13 +1402,18 @@ static void testRestartIsGentle()
         {
             auto before = run (10 + r);                  // a different place in the sound each time
             e.prepare (kSr, kBlock, 2);                  // what Logic does when playback restarts
-            auto after = run (3);
+            auto after = run (8);
 
             const size_t n = before.L.size();
             float natural = 0.0f;
             for (size_t i = n - 2400; i + 1 < n; ++i)
                 natural = std::max (natural, std::max (std::fabs (before.L[i + 1] - before.L[i]), std::fabs (before.R[i + 1] - before.R[i])));
-            const float jump = std::max (std::fabs (after.L[0] - before.L[n - 1]), std::fabs (after.R[0] - before.R[n - 1]));
+            // The host's output is silent while stopped, so what the plugin gives after the restart is judged
+            // as a start from zero: it must begin at (almost) zero and never step harder than the sound itself.
+            float jump = std::max (std::fabs (after.L[0]), std::fabs (after.R[0]));
+            for (size_t i = 1; i < 1500; ++i)
+                jump = std::max (jump, std::max (std::fabs (after.L[i] - after.L[i - 1]), std::fabs (after.R[i] - after.R[i - 1])));
+            CHECK (rms (after.L, 1000, 1500) > 0.3f * rms (before.L, n - 2400, n), "variant %d: the sound is back at full level after the fade-in", variant);
             worst = std::max (worst, jump / std::max (natural, 1e-4f));
             loudest = std::max (loudest, rms (before.L, n - 2400, n));
         }
