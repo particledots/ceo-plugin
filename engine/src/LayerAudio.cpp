@@ -121,4 +121,78 @@ std::vector<float> resampleOffline (const std::vector<float>& in, double inRate,
     return out;
 }
 
+double joinedSeconds (const std::vector<LayerAudio>& parts, double gapSeconds)
+{
+    double total = 0.0;
+    for (size_t i = 0; i < parts.size(); ++i)
+    {
+        if (i > 0) total += gapSeconds;
+        if (parts[i].sampleRate > 0.0) total += (double) parts[i].frames() / parts[i].sampleRate;
+    }
+    return total;
+}
+
+bool joinLayerAudio (const std::vector<LayerAudio>& parts, double gapSeconds, LayerAudio& out, JoinResult& res)
+{
+    res = JoinResult();
+    if (parts.empty() || parts[0].sampleRate <= 0.0) return false;
+
+    // how many parts the 10 s rule takes: stop after the one that makes the total more than 10 s
+    size_t used = 0; double total = 0.0;
+    for (size_t i = 0; i < parts.size(); ++i)
+    {
+        if (parts[i].sampleRate <= 0.0 || parts[i].frames() == 0) return false;
+        if (i > 0) total += gapSeconds;
+        total += (double) parts[i].frames() / parts[i].sampleRate;
+        used = i + 1;
+        if (total > kJoinStopSeconds) break;
+    }
+    res.used = used;
+
+    if (used == 1)
+    {
+        out = parts[0];
+        res.seconds = (double) out.frames() / out.sampleRate;
+        return true;
+    }
+
+    const double rate = parts[0].sampleRate;
+    int channels = 1;
+    for (size_t i = 0; i < used; ++i) if (parts[i].channels >= 2) channels = 2;
+    out = LayerAudio();
+    out.channels = channels; out.sampleRate = rate;
+
+    const size_t maxFrames = (size_t) std::llround (kJoinMaxSeconds * rate);
+    const size_t gapFrames = (size_t) std::llround (std::max (0.0, gapSeconds) * rate);
+    const size_t fadeFrames = std::max<size_t> (1, (size_t) std::llround (kJoinFadeSeconds * rate));
+
+    for (size_t i = 0; i < used; ++i)
+    {
+        std::vector<float> c[2];
+        for (int ch = 0; ch < 2; ++ch)
+        {
+            const std::vector<float>& src = (ch == 1 && parts[i].channels < 2) ? parts[i].ch[0] : parts[i].ch[ch];
+            c[ch] = (std::abs (parts[i].sampleRate - rate) < 1e-6) ? src : resampleOffline (src, parts[i].sampleRate, rate);
+        }
+        const size_t n = c[0].size();
+        const size_t f = std::min (fadeFrames, n / 4);
+        if (i > 0)                                  // fade in
+            for (int ch = 0; ch < 2; ++ch)
+                for (size_t k = 0; k < f; ++k) c[ch][k] *= (float) (k + 1) / (float) (f + 1);
+        if (i + 1 < used)                           // fade out
+            for (int ch = 0; ch < 2; ++ch)
+                for (size_t k = 0; k < f; ++k) c[ch][n - 1 - k] *= (float) (k + 1) / (float) (f + 1);
+
+        if (i > 0) for (int ch = 0; ch < channels; ++ch) out.ch[ch].insert (out.ch[ch].end(), gapFrames, 0.0f);
+        for (int ch = 0; ch < channels; ++ch) out.ch[ch].insert (out.ch[ch].end(), c[ch].begin(), c[ch].end());
+    }
+    if (out.ch[0].size() > maxFrames)
+    {
+        for (int ch = 0; ch < channels; ++ch) out.ch[ch].resize (maxFrames);
+        res.cut = true;
+    }
+    res.seconds = (double) out.frames() / rate;
+    return true;
+}
+
 } // namespace ceo

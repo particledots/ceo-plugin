@@ -48,7 +48,9 @@ namespace scene
         std::string folder;
         std::string name;                    // the folder's name
         std::string audio[kLayers];          // full path per layer, empty = no file for that layer
-        int audioCount = 0;
+        std::vector<std::string> extra[kLayers];   // further files with the same leading digit (alphabetical), used only when joining is on
+        int audioCount = 0;                  // layers that have a file
+        int extraCount = 0;                  // files with a layer digit that come after the first one of their layer
         std::string settingsFile;            // full path, empty = none
         bool byDigit = false;                // layers were picked by the leading digit (else: first six in alphabetical order)
     };

@@ -75,6 +75,9 @@ public:
     void setScenesFolder (const juce::File&);
     int  getLoadWhat() const { return loadWhat; }
     void setLoadWhat (int);                                            // 0 as the file says, 1 layers only, 2 scene, 3 settings only
+    // Milestone 12: with this on, several files with the same leading digit are joined into one layer (like an Arbhar library slot). Off by default.
+    bool getJoinShort() const { return joinShort; }
+    void setJoinShort (bool);
 
 private:
     ceo::scene::Settings currentSettings() const;
@@ -93,6 +96,7 @@ private:
     juce::File homeFolder;
     juce::File scenesFolder;                // where the Scenes menu looks (per computer)
     int loadWhat = 0;                       // the Load menu (per computer)
+    bool joinShort = false;                 // join short files when loading a Scene (per computer)
     mutable juce::CriticalSection sceneLock;
     juce::File sceneFolder;                 // the Scene this project is linked to (empty = none)
     juce::String sceneMask;                 // the layers (digits 1..6) that came from / went to that Scene folder

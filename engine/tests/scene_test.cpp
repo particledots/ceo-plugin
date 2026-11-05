@@ -221,12 +221,15 @@ static void testParser()
     check (p.s.inputMode == 1, "InputMode 1 -> Stereo", p.s.inputMode);
     check (p.s.modTarget == 0, "ModCV 1 (Panning) -> Pan", p.s.modTarget);
     check (p.s.follow == 0, "FollowMode 0 (Scan mode) -> off", p.s.follow);
-    check (p.s.onsetCapture == 1, "OnsetMode 1 -> Onset capture on", p.s.onsetCapture);
+    check (p.s.onsetCapture == -1, "OnsetMode 1 (alpha) does NOT switch Onset capture on (it would record over the loaded layers)", p.s.onsetCapture);
+    {   bool noted = false; for (const auto& n : p.notes) if (n.find ("Onset capture") != std::string::npos && n.find ("overwrite") != std::string::npos) noted = true;
+        check (noted, "and the report says why"); }
+    for (const auto& line : p.set) check (line.find ("Onset") == std::string::npos, "Onset is not listed as set");
     check (p.s.pitchScale == ceo::scales::kNumScales, "the chromatic quantise table -> Pitch Scale Chromatic", p.s.pitchScale);
     check (has (p.ignored, "PhaseSwitch") && has (p.ignored, "AnalogEmulation") && has (p.ignored, "WavetableCentreFrequency") && has (p.ignored, "FollowSpeedDirection"),
            "settings Ceo has no use for are listed as ignored");
     check (! has (p.ignored, "InputMode") && ! has (p.ignored, "LoadConfiguration") && ! has (p.ignored, "ModCV"), "settings Ceo uses are not listed as ignored");
-    check (p.set.size() == 5, "five settings reported as set", (double) p.set.size());
+    check (p.set.size() == 4, "four settings reported as set (Onset is left alone)", (double) p.set.size());
     {   std::set<std::string> uniq (p.ignored.begin(), p.ignored.end()); check (uniq.size() == p.ignored.size(), "no name listed twice"); }
 
     // words, as the manual shows them; also the manual's own typo in "LoadConf iguration"
@@ -234,7 +237,15 @@ static void testParser()
                              "PARAMETER: FollowMode: Scan Mode\nPARAMETER: ModCV: Panning\nPARAMETER: QuantiseTable: Octaves\n");
     check (p.loadConfiguration == 1 && p.s.inputMode == 0 && p.s.onsetCapture == 0 && p.s.follow == 0 && p.s.modTarget == 0 && p.s.pitchScale == 0, "word values are understood");
     p = sc::parsePresetText ("#ARB\nPARAMETER: ModCV: Delay\nPARAMETER: FollowMode: Follow Mode\nPARAMETER: OnsetMode: beta\nPARAMETER: QuantiseTable: Natural Minor\n");
-    check (p.s.modTarget == 3 && p.s.follow == 1 && p.s.onsetCapture == 1 && p.s.pitchScale == 6, "Delay, Follow Mode, beta, Natural Minor");
+    check (p.s.modTarget == 3 && p.s.follow == 1 && p.s.onsetCapture == -1 && p.s.pitchScale == 6, "Delay, Follow Mode, beta (Onset left alone), Natural Minor");
+    p = sc::parsePresetText ("#ARB\nPARAMETER: OnsetMode: 2\n");
+    check (p.s.onsetCapture == -1 && ! p.notes.empty(), "OnsetMode 2 (beta) is left alone too");
+    p = sc::parsePresetText ("#ARB\nPARAMETER: OnsetMode: 0\n");
+    check (p.s.onsetCapture == 0, "OnsetMode 0 still switches Onset capture off");
+    p = sc::parsePresetText ("#ARB\nPARAMETER: OnsetMode: Enable\nPARAMETER: InputMode: Mono\n");
+    check (p.s.onsetCapture == -1 && p.s.inputMode == 0, "the word Enable is left alone as well");
+    p = sc::parsePresetText ("#CEO-SCENE 1\nPARAMETER: OnsetMode: Enable\n");
+    check (p.ceoFile && p.s.onsetCapture == 1, "Ceo's own scene file brings back Onset capture as it was saved");
     p = sc::parsePresetText ("#ARB\nPARAMETER: ModCV: 0\nPARAMETER: OnsetMode: delta\n");
     check (p.s.modTarget == -1 && p.s.onsetCapture == -1 && p.notes.size() == 2, "Mod CV none and an onset mode Ceo doesn't have are left alone, with a note", (double) p.notes.size());
     p = sc::parsePresetText ("\xef\xbb\xbf#ARB\r\nPARAMETER: ModCV: 4\r\n");
@@ -288,8 +299,8 @@ static void testOfficialStyle()
     const char* chromatic = "1 -2 2 -1 3 -4 4 -3 5 -7 6 -6 7 -5 8 -9 9 -8 10 -11 11 -10 12 -12";
     auto classic = sc::parsePresetText (officialStyle ("arbhar Classic", 0, 3, chromatic));
     check (classic.valid && classic.name == "arbhar Classic" && classic.loadConfiguration == 2, "arbharClassic: valid, name, Load Configuration 2");
-    check (classic.s.inputMode == 0 && classic.s.modTarget == 2 && classic.s.follow == 0 && classic.s.onsetCapture == 1 && classic.s.pitchScale == ceo::scales::kNumScales,
-          "arbharClassic: Mono, Reverb, Scan, Onset on, Chromatic");
+    check (classic.s.inputMode == 0 && classic.s.modTarget == 2 && classic.s.follow == 0 && classic.s.onsetCapture == -1 && classic.s.pitchScale == ceo::scales::kNumScales,
+          "arbharClassic: Mono, Reverb, Scan, Chromatic, Onset left alone");
     check (classic.ignored.size() == 17, "17 settings are listed as ignored", (double) classic.ignored.size());
     auto stereo = sc::parsePresetText (officialStyle ("Stereo", 1, 3, chromatic));
     check (stereo.s.inputMode == 1 && stereo.s.modTarget == 2, "Stereo: Stereo input, Reverb");
@@ -538,9 +549,180 @@ static void testSaveScene()
     fs::remove_all (home);
 }
 
+static void spitWav (const fs::path& p, double rate, double seconds, double hz, int channels = 2, float amp = 0.5f)
+{
+    const auto bytes = ceo::writeWav16 (makeTone (rate, seconds, hz, amp, channels));
+    fs::create_directories (p.parent_path());
+    std::ofstream f (p, std::ios::binary | std::ios::trunc);
+    f.write ((const char*) bytes.data(), (std::streamsize) bytes.size());
+}
+
+static std::vector<float> slice (const std::vector<float>& v, double from, double to, double rate)
+{
+    const size_t a = std::min (v.size(), (size_t) (from * rate)), b = std::min (v.size(), (size_t) (to * rate));
+    return std::vector<float> (v.begin() + (long) a, v.begin() + (long) b);
+}
+
+static void testJoin()
+{
+    std::printf ("[7] joining short files into one layer\n");
+    const double R = 48000.0;
+    auto partsOf = [&] (std::initializer_list<double> secs, double hz0 = 440.0)
+    {
+        std::vector<LayerAudio> v; double hz = hz0;
+        for (double sec : secs) { v.push_back (makeTone (R, sec, hz, 0.5f, 2)); hz += 220.0; }
+        return v;
+    };
+    LayerAudio out; ceo::JoinResult jr;
+
+    // the 10 s rule: stop after the file that makes the total MORE than 10 s
+    auto p4 = partsOf ({ 3.2, 2.5, 4.1, 2.0, 1.5 });
+    check (ceo::joinLayerAudio (p4, 0.0, out, jr) && jr.used == 4 && std::abs (jr.seconds - 11.8) < 0.001 && ! jr.cut, "no gap: 3.2+2.5+4.1 = 9.8 s is not past 10 s, so the 4th file is taken too (11.8 s)", (double) jr.used, jr.seconds);
+    check (ceo::joinLayerAudio (p4, 0.25, out, jr) && jr.used == 3 && std::abs (jr.seconds - 10.3) < 0.001, "0.25 s gap: 10.3 s after three files, so the 4th is left out", (double) jr.used, jr.seconds);
+    check (ceo::joinLayerAudio (p4, 0.5, out, jr) && jr.used == 3 && std::abs (jr.seconds - 10.8) < 0.001, "0.5 s gap: 10.8 s after three files", (double) jr.used, jr.seconds);
+    check (std::abs (ceo::joinedSeconds ({ p4[0], p4[1] }, 0.25) - 5.95) < 1e-6, "joinedSeconds counts the gap between files");
+    check (std::abs (jr.seconds - (double) out.frames() / R) < 1e-9 && out.channels == 2 && out.sampleRate == R, "result: length, stereo, first file's rate");
+
+    // exactly 10 s is not "more than 10 s"
+    auto pe = partsOf ({ 5.0, 5.0, 1.0 });
+    check (ceo::joinLayerAudio (pe, 0.0, out, jr) && jr.used == 3, "exactly 10.000 s: the next file is still taken", (double) jr.used);
+
+    // one file comes back unchanged
+    auto p1 = partsOf ({ 4.0, 2.0 });
+    check (ceo::joinLayerAudio ({ p1[0] }, 0.25, out, jr) && jr.used == 1 && out.ch[0] == p1[0].ch[0] && out.ch[1] == p1[0].ch[1], "a single file is untouched (no fade, no cut)");
+    LayerAudio longOne = makeTone (R, 14.0, 300.0, 0.5f, 2);
+    check (ceo::joinLayerAudio ({ longOne }, 0.25, out, jr) && out.frames() == longOne.frames() && ! jr.cut, "a single long file is left to the engine (it cuts at 13 s itself)");
+
+    // cut at 13 s
+    auto pc = partsOf ({ 9.9, 6.0 });
+    check (ceo::joinLayerAudio (pc, 0.25, out, jr) && jr.used == 2 && jr.cut && out.frames() == (size_t) (13.0 * R), "more than 13 s is cut at 13 s", (double) out.frames(), 13.0 * R);
+
+    // what the joined audio is made of
+    auto p3 = partsOf ({ 3.2, 2.5, 4.1 }, 440.0);
+    ceo::joinLayerAudio (p3, 0.25, out, jr);
+    const double g = 0.25;
+    check (out.ch[0][0] == p3[0].ch[0][0] && out.ch[0][(size_t) (1.5 * R)] == p3[0].ch[0][(size_t) (1.5 * R)], "the start and middle of the first file are exactly as in the file");
+    check (std::abs (out.ch[0][(size_t) (3.2 * R) - 1]) < 0.01f, "the end of the first file is faded (no click at the join)");
+    {
+        const auto gapSeg = slice (out.ch[0], 3.2 + 0.01, 3.2 + g - 0.01, R);
+        bool zero = ! gapSeg.empty(); for (float v : gapSeg) if (v != 0.0f) zero = false;
+        check (zero, "the gap is silence");
+        const size_t second = (size_t) std::llround ((3.2 + g) * R);
+        check (std::abs (out.ch[0][second]) < 0.01f, "the second file fades in");
+        check (out.ch[0][second + (size_t) (1.0 * R)] == p3[1].ch[0][(size_t) (1.0 * R)], "the middle of the second file is exactly as in the file");
+        check (out.ch[0].back() == p3[2].ch[0].back(), "the last file is not faded at its end");
+    }
+    check (amplitudeAt (slice (out.ch[0], 0.5, 3.0, R), 440.0, R) > 0.45 && amplitudeAt (slice (out.ch[0], 3.2 + g + 0.5, 3.2 + g + 2.0, R), 660.0, R) > 0.45
+          && amplitudeAt (slice (out.ch[0], 3.2 + g + 2.5 + g + 0.5, 3.2 + g + 2.5 + g + 3.5, R), 880.0, R) > 0.45, "the three tones sit one after another in order");
+
+    // mono and stereo, other sample rates
+    std::vector<LayerAudio> mix;
+    mix.push_back (makeTone (R, 2.0, 440.0, 0.5f, 1));
+    mix.push_back (makeTone (R, 2.0, 660.0, 0.5f, 2, 880.0));
+    check (ceo::joinLayerAudio (mix, 0.25, out, jr) && out.channels == 2 && out.ch[0].size() == out.ch[1].size(), "mono + stereo gives stereo");
+    check (slice (out.ch[0], 0.2, 1.8, R) == slice (out.ch[1], 0.2, 1.8, R), "the mono file is on both sides");
+    check (amplitudeAt (slice (out.ch[0], 2.25 + 0.3, 3.9, R), 660.0, R) > 0.45 && amplitudeAt (slice (out.ch[1], 2.25 + 0.3, 3.9, R), 880.0, R) > 0.45, "the stereo file keeps its two sides");
+    std::vector<LayerAudio> mono2; mono2.push_back (makeTone (R, 1.0, 440.0, 0.5f, 1)); mono2.push_back (makeTone (R, 1.0, 550.0, 0.5f, 1));
+    check (ceo::joinLayerAudio (mono2, 0.0, out, jr) && out.channels == 1 && out.ch[1].empty(), "two mono files stay mono");
+    std::vector<LayerAudio> rates; rates.push_back (makeTone (R, 2.0, 440.0)); rates.push_back (makeTone (44100.0, 2.0, 660.0)); rates.push_back (makeTone (96000.0, 1.0, 880.0));
+    check (ceo::joinLayerAudio (rates, 0.25, out, jr) && out.sampleRate == R && std::abs ((double) out.frames() / R - 5.5) < 0.002, "files at 44.1 and 96 kHz are brought to the first file's rate (length in seconds kept)", (double) out.frames() / R);
+    check (amplitudeAt (slice (out.ch[0], 2.25 + 0.3, 4.1, R), 660.0, R) > 0.4 && amplitudeAt (slice (out.ch[0], 4.25 + 0.3, 5.2, R), 880.0, R) > 0.4, "and their pitch is right");
+    check (! ceo::joinLayerAudio ({}, 0.25, out, jr), "nothing to join: false");
+
+    // folder scan keeps the extra files of a layer
+    const fs::path home = freshHome ("join");
+    const fs::path d = home / "Scenes" / "drums";
+    for (auto* n : { "1_kick.wav", "1_snare.wav", "1_hat.wav", "2_pad.wav", "3_b2.wav", "3_b1.wav", "4_x.txt" }) spitS (d / n, "x");
+    auto f = sc::scanFolder (d.string());
+    check (f.byDigit && f.audioCount == 3 && f.extraCount == 3, "scan: three layers, three extra files", (double) f.extraCount);
+    check (fs::path (f.audio[0]).filename() == "1_hat.wav" && f.extra[0].size() == 2 && fs::path (f.extra[0][0]).filename() == "1_kick.wav" && fs::path (f.extra[0][1]).filename() == "1_snare.wav", "layer alpha: files in alphabetical order");
+    check (fs::path (f.audio[2]).filename() == "3_b1.wav" && f.extra[2].size() == 1 && f.extra[1].empty(), "layer gamma: two files, beta: one");
+    const fs::path d2 = home / "Scenes" / "plain";
+    for (auto* n : { "a.wav", "b.wav", "c.wav" }) spitS (d2 / n, "x");
+    f = sc::scanFolder (d2.string());
+    check (! f.byDigit && f.extraCount == 0, "without digits there is nothing to join (the first six files fill the layers)");
+
+    // loading the layer from real files
+    const fs::path jd = home / "Scenes" / "join_scene";
+    spitWav (jd / "1_a.wav", R, 3.2, 440.0); spitWav (jd / "1_b.wav", R, 2.5, 660.0); spitWav (jd / "1_c.wav", R, 4.1, 880.0, 1);
+    spitS (jd / "1_d.wav", "this file is not a wav, but it is past 10 s so it is never read");
+    spitWav (jd / "2_one.wav", R, 3.0, 1100.0);
+    const std::vector<std::string> a3 = { (jd / "1_a.wav").string(), (jd / "1_b.wav").string(), (jd / "1_c.wav").string(), (jd / "1_d.wav").string() };
+    Inst a; a.lib.setHomeFolder (home.string());
+    std::string why; std::vector<Lib::JoinInfo> infos;
+    check (a.lib.loadGroups ({ { 0, a3 }, { 1, { (jd / "2_one.wav").string() } } }, 0.25, why, &infos), "loadGroups accepted (the bad 4th file is never read)");
+    a.settle();
+    check (infos.size() == 2 && infos[0].layer == 0 && infos[0].used == 3 && infos[0].leftOut == 1 && std::abs (infos[0].seconds - 10.3) < 0.002 && ! infos[0].cut, "report: alpha 3 files joined, 1 left out, 10.3 s", (double) infos[0].used, infos[0].seconds);
+    check (infos[1].used == 1 && infos[1].leftOut == 0, "report: beta is a single file");
+    {
+        const auto w = a.whole (0);
+        check (a.e.layerState (0) == Engine::LayerFilled && amplitudeAt (slice (w, 0.5, 3.0, R), 440.0, R) > 0.4 && amplitudeAt (slice (w, 3.45 + 0.5, 3.45 + 2.0, R), 660.0, R) > 0.4
+              && amplitudeAt (slice (w, 5.95 + 0.5, 5.95 + 3.5, R), 880.0, R) > 0.4, "the layer holds the three tones in order");
+        check (toneOf (a.tail (1), R) == 0 || a.e.layerState (1) == Engine::LayerFilled, "layer beta holds its single file");
+    }
+    const auto info0 = a.lib.info (0);
+    check (info0.bound && info0.files == 3 && info0.fileName == "1_a.wav" && info0.status == Lib::Ok, "alpha is linked to its first file and knows it is joined from 3");
+    check (a.lib.info (1).files == 1, "beta: one file");
+    auto binds = a.lib.bindings();
+    check (binds.size() == 2 && binds[0].second.more.size() == 2 && binds[0].second.gapMs == 250 && binds[1].second.more.empty() && binds[1].second.gapMs == 0, "bindings: two further files and the gap for alpha");
+    check (! a.lib.info (0).unsaved, "a joined layer is not 'unsaved'");
+
+    // a bad file among the ones that are used: nothing at all is loaded
+    Inst b; b.lib.setHomeFolder (home.string());
+    spitS (jd / "1_b_bad.wav", "not a wav");
+    check (! b.lib.loadGroups ({ { 0, { a3[0], (jd / "1_b_bad.wav").string() } } }, 0.25, why) && why.find ("1_b_bad.wav") != std::string::npos && why.find ("Nothing was loaded") != std::string::npos, "a bad file that is needed: refused, naming it");
+    b.settle();
+    check (b.e.layerState (0) == Engine::LayerEmpty && ! b.lib.info (0).bound, "and nothing was loaded");
+    fs::remove (jd / "1_b_bad.wav");
+
+    // a project brings the joined layer back (same audio, sample for sample)
+    {
+        Inst c; c.lib.setHomeFolder (home.string());
+        c.lib.restore (binds);
+        c.settle();
+        check (c.e.layerState (0) == Engine::LayerFilled && c.whole (0) == a.whole (0) && c.whole (1) == a.whole (1), "restore: the same audio comes back");
+        check (c.lib.info (0).files == 3 && c.lib.info (0).status == Lib::Ok && sc::scanFolder (jd.string()).audioCount == 2, "restore: still linked to three files");
+        // asking again with the same binding keeps everything (the host set the same state twice)
+        c.lib.restore (c.lib.bindings()); c.settle();
+        check (c.lib.info (0).status == Lib::Ok && c.e.layerState (0) == Engine::LayerFilled, "restoring the same state twice changes nothing");
+        // moving a middle file inside the home folder: found again by its fingerprint
+        fs::create_directories (home / "elsewhere");
+        fs::rename (jd / "1_b.wav", home / "elsewhere" / "renamed_b.wav");
+        Inst e2; e2.lib.setHomeFolder (home.string()); e2.lib.restore (binds); e2.settle();
+        check (e2.e.layerState (0) == Engine::LayerFilled && e2.whole (0) == a.whole (0) && e2.lib.info (0).status == Lib::Ok, "a moved and renamed middle file is found by size and fingerprint");
+        // a missing file: red 'missing', naming it; the layer stays empty
+        fs::remove (home / "elsewhere" / "renamed_b.wav");
+        Inst m; m.lib.setHomeFolder (home.string()); m.lib.restore (binds); m.settle();
+        const auto mi = m.lib.info (0);
+        check (mi.status == Lib::Missing && mi.message.find ("1_b.wav") != std::string::npos && m.e.layerState (0) == Engine::LayerEmpty, "a missing file: Missing, names the file, layer stays empty");
+        spitWav (jd / "1_b.wav", R, 2.5, 660.0);       // put back (same bytes)
+        // a changed file loads but is flagged
+        spitWav (jd / "1_c.wav", R, 4.1, 990.0, 1);
+        Inst ch; ch.lib.setHomeFolder (home.string()); ch.lib.restore (binds); ch.settle();
+        check (ch.lib.info (0).status == Lib::Changed && ch.e.layerState (0) == Engine::LayerFilled, "a changed file: loaded and flagged as changed");
+        spitWav (jd / "1_c.wav", R, 4.1, 880.0, 1);
+    }
+
+    // a sample-rate change reloads the joined layer from its files
+    {
+        a.sr = 44100.0; a.e.prepare (44100.0, 441, 2); a.run (0.3, 0.0); a.settle();
+        const auto w = a.whole (0);
+        check (a.e.layerState (0) == Engine::LayerFilled && a.lib.info (0).files == 3, "sample rate changed: the joined layer came back from its three files", (double) a.lib.info (0).files);
+        check (amplitudeAt (slice (w, 0.5, 3.0, 44100.0), 440.0, 44100.0) > 0.4 && amplitudeAt (slice (w, 3.45 + 0.5, 3.45 + 2.0, 44100.0), 660.0, 44100.0) > 0.4, "with the tones in the right places at the new rate");
+    }
+    // recording over the layer drops all the links
+    {
+        Inst r; r.lib.setHomeFolder (home.string()); r.lib.restore (binds); r.settle();
+        r.record (0, kTone[2], 0.8);
+        check (! r.lib.info (0).bound && r.lib.info (0).unsaved && r.lib.bindings().empty() == false, "recording over a joined layer drops its links (beta stays linked)");
+        r.settle();
+    }
+    fs::remove_all (home);
+}
+
 static void testSourceHygiene()
 {
-    std::printf ("[7] the scene code has no plugin framework in it\n");
+    std::printf ("[8] the scene code has no plugin framework in it\n");
     for (const char* path : { CEO_SCENE_H, CEO_SCENE_CPP })
     {
         const std::string text = slurp (path);
@@ -563,6 +745,7 @@ int main()
     testDecide();
     testLoadMany();
     testSaveScene();
+    testJoin();
     testSourceHygiene();
     std::printf ("\nscene_test: %d checks, %d failed\n", gChecks, gFailed);
     return gFailed == 0 ? 0 : 1;

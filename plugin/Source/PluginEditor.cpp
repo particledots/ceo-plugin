@@ -84,7 +84,7 @@ CeoPanel::CeoPanel (CeoAudioProcessor& p)
     sceneBox.onShowPopup = [this] { showSceneMenu(); };
     loadBox.onShowPopup  = [this] { showLoadMenu(); };
     sceneBox.setTooltip ("Pick a Scene (a folder of six WAV files plus a settings file), or save one");
-    loadBox.setTooltip ("What picking a Scene loads: as the file says, layers only, layers + settings, or settings only");
+    loadBox.setTooltip ("What picking a Scene loads: as the file says, layers only, layers + settings, or settings only. Also: join several short files into one layer");
     updateSceneBoxes();
 
     setUpDropdown (inputModeBox, CeoParams::inputMode, inputModeAttachment);
@@ -398,14 +398,18 @@ void CeoPanel::showLoadMenu()
     juce::PopupMenu m;
     for (int i = 0; i < 4; ++i)
         m.addItem (i + 1, kLoadNames[i], true, processor.getLoadWhat() == i);
+    m.addSeparator();
+    m.addItem (10, "Join short files into one layer", true, processor.getJoinShort());      // milestone 12
     juce::Component::SafePointer<CeoPanel> self (this);
     m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&loadBox), [self] (int r)
     {
-        if (self != nullptr && r > 0)
-        {
+        if (self == nullptr || r <= 0)
+            return;
+        if (r == 10)
+            self->processor.setJoinShort (! self->processor.getJoinShort());
+        else
             self->processor.setLoadWhat (r - 1);
-            self->updateSceneBoxes();
-        }
+        self->updateSceneBoxes();
     });
 }
 
@@ -586,7 +590,7 @@ void CeoPanel::updateFileStrip()
                                 { a = head + msg; colour = red; b = "Put it back, or point FOLDER... at it"; }
         else if (li.status == ceo::LayerLibrary::Failed)
                                 { a = head + msg; colour = red; }
-        else if (li.bound)      { a = head + "linked to " + name + (li.status == ceo::LayerLibrary::Changed ? "  (file changed since the project was saved)" : ""); colour = li.status == ceo::LayerLibrary::Changed ? amber : cream(); }
+        else if (li.bound)      { a = head + "linked to " + name + (li.files > 1 ? " + " + juce::String (li.files - 1) + " more (joined)" : juce::String()) + (li.status == ceo::LayerLibrary::Changed ? "  (file changed since the project was saved)" : ""); colour = li.status == ceo::LayerLibrary::Changed ? amber : cream(); }
         else if (li.unsaved)    { a = head + "Not saved to a file: SAVE WAV to keep it"; colour = amber; }
         else                    { a = head + "empty  -  LOAD WAV to bring a file in"; colour = cream().withAlpha (0.7f); }
     }

@@ -52,6 +52,7 @@ CeoAudioProcessor::CeoAudioProcessor()
         scenesFolder = sf.isNotEmpty() ? juce::File (sf)
                                        : juce::File::getSpecialLocation (juce::File::userMusicDirectory).getChildFile ("Unofficial Ceo").getChildFile ("Scenes");
         loadWhat = juce::jlimit (0, 3, readSetting ("loadWhat").getIntValue());
+        joinShort = readSetting ("joinShort").getIntValue() == 1;
     }
     startTimerHz (10);
 }
@@ -101,6 +102,12 @@ void CeoAudioProcessor::setLoadWhat (int w)
 {
     loadWhat = juce::jlimit (0, 3, w);
     writeSetting ("loadWhat", juce::String (loadWhat));
+}
+
+void CeoAudioProcessor::setJoinShort (bool on)
+{
+    joinShort = on;
+    writeSetting ("joinShort", on ? "1" : "0");
 }
 
 void CeoAudioProcessor::setSceneLink (const juce::File& folder, const juce::String& mask)
@@ -214,27 +221,67 @@ CeoAudioProcessor::SceneResult CeoAudioProcessor::runSceneLoad (const ScenePlan&
     int count = 0;
     juce::String report = "Scene: " + name + "\n";
 
+    juce::StringArray joinedBrief;
     if (plan.decision.layers)
     {
-        std::vector<std::pair<int, std::string>> list;
+        std::vector<ceo::LayerLibrary::LoadItem> items;
         for (int i = 0; i < ceo::kNumLayers; ++i)
-            if (! plan.files.audio[i].empty()) { list.push_back ({ i, plan.files.audio[i] }); mask << juce::String (i + 1); ++count; }
+            if (! plan.files.audio[i].empty())
+            {
+                ceo::LayerLibrary::LoadItem it; it.layer = i;
+                it.files.push_back (plan.files.audio[i]);
+                if (joinShort)
+                    for (const auto& more : plan.files.extra[i]) it.files.push_back (more);
+                items.push_back (std::move (it));
+                mask << juce::String (i + 1); ++count;
+            }
         std::string why;
-        if (! library.loadMany (list, why))
+        std::vector<ceo::LayerLibrary::JoinInfo> infos;
+        if (! library.loadGroups (items, ceo::kJoinGapSeconds, why, &infos))
         {
             r.message = juce::String::fromUTF8 (why.c_str());
             return r;                                   // nothing was loaded, nothing was changed
         }
+        auto nameOf = [] (const std::string& f) { return juce::File (juce::String::fromUTF8 (f.c_str())).getFileName(); };
         report << "\nLayers loaded (" << juce::String (count) << "):\n";
-        for (const auto& [l, f] : list)
-            report << "  " << kLayerWords[l] << ": " << juce::File (juce::String::fromUTF8 (f.c_str())).getFileName() << "\n";
+        for (size_t k = 0; k < items.size(); ++k)
+        {
+            const auto& it = items[k];
+            const auto& ji = infos[k];
+            report << "  " << kLayerWords[it.layer] << ": ";
+            if (ji.used <= 1 && ji.leftOut == 0)
+            {
+                report << nameOf (it.files[0]) << "\n";
+                continue;
+            }
+            if (ji.used > 1)
+            {
+                report << juce::String (ji.used) << " files joined (" << juce::String (ji.seconds, 1) << " s, "
+                       << juce::String (ceo::kJoinGapSeconds, 2) << " s gap): ";
+                for (int f = 0; f < ji.used; ++f) report << nameOf (it.files[(size_t) f]) << (f + 1 < ji.used ? ", " : "");
+                joinedBrief.add (juce::String (kLayerWords[it.layer]) + " " + juce::String (ji.used) + " joined");
+                if (ji.cut) report << "; the end was cut at 13 s";
+            }
+            else
+                report << nameOf (it.files[0]);
+            if (ji.leftOut > 0)
+            {
+                report << "; not used, the layer was already past 10 s: ";
+                for (size_t f = (size_t) ji.used; f < it.files.size(); ++f) report << nameOf (it.files[f]) << (f + 1 < it.files.size() ? ", " : "");
+            }
+            report << "\n";
+        }
+        if (! joinShort && plan.files.extraCount > 0)
+            report << "\nJoin short files is off: " << juce::String (plan.files.extraCount) << (plan.files.extraCount == 1 ? " more file" : " more files")
+                   << " with a layer digit in front were not loaded (only the first file of each layer is). Switch it on in the Load menu to join them.\n";
     }
     else
         report << "\nLayers: not loaded.\n";
 
     juce::String shortMsg;
     if (plan.decision.layers)
-        shortMsg << juce::String (count) << (count == 1 ? " layer" : " layers") << " loaded. ";
+        shortMsg << juce::String (count) << (count == 1 ? " layer" : " layers") << " loaded"
+                 << (joinedBrief.isEmpty() ? juce::String() : " (" + joinedBrief.joinIntoString (", ") + ")") << ". ";
 
     const bool usable = plan.preset.valid && plan.preset.s.any();
     if (plan.decision.settings)
@@ -409,6 +456,17 @@ void CeoAudioProcessor::getStateInformation (juce::MemoryBlock& destData)
                 e->setAttribute ("path", juce::String::fromUTF8 (b.path.c_str()));
                 e->setAttribute ("size", juce::String ((juce::int64) b.size));
                 e->setAttribute ("hash", juce::String::toHexString ((juce::int64) b.hash));
+                if (! b.more.empty())                                  // a layer joined from several files (milestone 12)
+                {
+                    e->setAttribute ("gap", b.gapMs);
+                    for (const auto& pt : b.more)
+                    {
+                        auto* pe = e->createNewChildElement ("PART");
+                        pe->setAttribute ("path", juce::String::fromUTF8 (pt.path.c_str()));
+                        pe->setAttribute ("size", juce::String ((juce::int64) pt.size));
+                        pe->setAttribute ("hash", juce::String::toHexString ((juce::int64) pt.hash));
+                    }
+                }
             }
         }
         {
@@ -442,6 +500,15 @@ void CeoAudioProcessor::setStateInformation (const void* data, int sizeInBytes)
                     b.path = e->getStringAttribute ("path").toStdString();
                     b.size = (uint64_t) e->getStringAttribute ("size").getLargeIntValue();
                     b.hash = (uint64_t) e->getStringAttribute ("hash").getHexValue64();
+                    for (auto* pe : e->getChildWithTagNameIterator ("PART"))     // absent in projects saved before milestone 12
+                    {
+                        ceo::LayerLibrary::Binding::Part pt;
+                        pt.path = pe->getStringAttribute ("path").toStdString();
+                        pt.size = (uint64_t) pe->getStringAttribute ("size").getLargeIntValue();
+                        pt.hash = (uint64_t) pe->getStringAttribute ("hash").getHexValue64();
+                        if (! pt.path.empty()) b.more.push_back (pt);
+                    }
+                    b.gapMs = b.more.empty() ? 0 : e->getIntAttribute ("gap", 250);
                     const int layer = e->getIntAttribute ("index") - 1;
                     if (layer >= 0 && layer < ceo::kNumLayers && ! b.path.empty())
                         refs.push_back ({ layer, b });

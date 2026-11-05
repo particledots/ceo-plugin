@@ -199,7 +199,11 @@ Preset parsePresetText (const std::string& text)
             else if (q == "disable" || q == "off" || q == "none" || q == "disabled") v = 0;
             else if (q == "alpha" || q == "beta" || q == "enable" || q == "on") v = 1;
             if (v < 0) p.notes.push_back ("Onset mode \"" + value + "\" is not one Ceo has (only alpha / beta / off), so Onset capture is left as it is");
-            if (v >= 0) { p.s.onsetCapture = v; p.set.push_back (std::string ("Onset capture: ") + (v ? "on" : "off")); }
+            else if (v == 1 && ! p.ceoFile)
+                // Ceo's Onset capture records over the selected layer whenever sound arrives, which would overwrite what the Scene has just loaded.
+                // So a preset from Arbhar can switch it off but never on.
+                p.notes.push_back ("The file asks for Onset capture on (Onset mode " + value + "). Ceo leaves Onset capture as it is, because it records over the selected layer whenever sound arrives and would overwrite the layers just loaded. Use the Onset button if you want it");
+            else { p.s.onsetCapture = v; p.set.push_back (std::string ("Onset capture: ") + (v ? "on" : "off")); }
         }
         else if (name == "quantisetable" || name == "pitchscale")
         {
@@ -301,6 +305,7 @@ SceneFiles scanFolder (const std::string& folder)
             if (w[0] < '1' || w[0] > '6') continue;
             const int l = w[0] - '1';
             if (r.audio[l].empty()) r.audio[l] = (fs::path (folder) / w).string();
+            else { r.extra[l].push_back ((fs::path (folder) / w).string()); ++r.extraCount; }
         }
     }
     else

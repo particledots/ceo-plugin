@@ -28,4 +28,20 @@ bool readWav (const uint8_t* data, size_t size, LayerAudio& out, std::string& er
 // Converts audio from one sample rate to another (offline, whole signal at once). Same length in seconds.
 std::vector<float> resampleOffline (const std::vector<float>& in, double inRate, double outRate);
 
+// ---- Joining short files into one layer (milestone 12), like an Arbhar library slot ----
+// Files are laid one after another (with a small gap) until the total is MORE than kJoinStopSeconds; the file that crosses it is still
+// included. Whatever is past kJoinMaxSeconds (the layer size) is cut. A few thousandths of a second of fade sit on each join so it never clicks.
+constexpr double kJoinStopSeconds = 10.0;
+constexpr double kJoinMaxSeconds  = 13.0;
+constexpr double kJoinGapSeconds  = 0.25;
+constexpr double kJoinFadeSeconds = 0.005;
+
+// Total length in seconds of these parts joined with the gap between them (no cut applied).
+double joinedSeconds (const std::vector<LayerAudio>& parts, double gapSeconds);
+
+struct JoinResult { size_t used = 0; double seconds = 0.0; bool cut = false; };
+// Joins the parts in order (only as many as the 10 s rule takes: the rest of 'parts' is ignored; used says how many). The result has the
+// sample rate of the first part and is stereo if any part is stereo (a mono part is put on both sides). One part comes back unchanged.
+bool joinLayerAudio (const std::vector<LayerAudio>& parts, double gapSeconds, LayerAudio& out, JoinResult& result);
+
 } // namespace ceo

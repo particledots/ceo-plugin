@@ -1,6 +1,7 @@
 #include "ceo/LayerLibrary.h"
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <cstdio>
 #include <ctime>
 #include <filesystem>
@@ -108,13 +109,28 @@ bool LayerLibrary::findFile (const Binding& want, std::string& chosen, uint64_t&
     return false;
 }
 
-void LayerLibrary::bindSlot (int layer, const std::string& absFile, uint64_t hash, uint64_t size, uint32_t rev, uint32_t edit, Status st, const std::string& msg)
+void LayerLibrary::bindSlot (int layer, const std::string& absFile, uint64_t hash, uint64_t size, uint32_t rev, uint32_t edit, Status st, const std::string& msg,
+                             const std::vector<Binding::Part>* more, int gapMs)
 {
     Slot& s = slots[layer];
     s.bound = true;
     s.b.path = toStored (absFile); s.b.hash = hash; s.b.size = size;
+    s.b.more.clear(); s.b.gapMs = 0;
+    if (more && ! more->empty())
+    {
+        for (const auto& p : *more) s.b.more.push_back ({ toStored (p.path), p.size, p.hash });
+        s.b.gapMs = gapMs;
+    }
     s.rev = rev; s.edit = edit;
     s.status = st; s.message = msg;
+}
+
+bool LayerLibrary::sameBinding (const Binding& a, const Binding& b)
+{
+    if (a.size != b.size || a.hash != b.hash || a.gapMs != b.gapMs || a.more.size() != b.more.size()) return false;
+    for (size_t i = 0; i < a.more.size(); ++i)
+        if (a.more[i].size != b.more[i].size || a.more[i].hash != b.more[i].hash) return false;
+    return true;
 }
 
 void LayerLibrary::enqueue (Job j)
@@ -154,23 +170,49 @@ bool LayerLibrary::loadLayer (int layer, const std::string& file, std::string& w
 
 bool LayerLibrary::loadMany (const std::vector<std::pair<int, std::string>>& files, std::string& whyNot)
 {
+    std::vector<LoadItem> items;
+    for (const auto& [layer, file] : files) { LoadItem it; it.layer = layer; it.files.push_back (file); items.push_back (std::move (it)); }
+    return loadGroups (items, 0.0, whyNot, nullptr);
+}
+
+bool LayerLibrary::loadGroups (const std::vector<LoadItem>& items, double gapSeconds, std::string& whyNot, std::vector<JoinInfo>* info)
+{
     std::lock_guard<std::mutex> g (m);
-    if (files.empty()) { whyNot = "There are no files to load."; return false; }
+    if (info) info->clear();
+    if (items.empty()) { whyNot = "There are no files to load."; return false; }
     if (scene.active) { whyNot = "A Scene is being saved - try again in a moment."; return false; }
     if (engine.anyLayerRecording()) { whyNot = "A recording is running - stop it first (Capture), then load."; return false; }
     std::vector<Job> jobs;
+    std::vector<JoinInfo> infos;
     bool seen[kNumLayers] = {};
-    for (const auto& [layer, file] : files)
+    for (const auto& item : items)
     {
-        if (layer < 0 || layer >= kNumLayers || seen[layer]) { whyNot = "Internal error: bad layer list."; return false; }
+        const int layer = item.layer;
+        if (layer < 0 || layer >= kNumLayers || seen[layer] || item.files.empty()) { whyNot = "Internal error: bad layer list."; return false; }
         seen[layer] = true;
         if (slots[layer].queued) { whyNot = "Layer " + std::string (kLayerNames[layer]) + " is busy - try again in a moment."; return false; }
-        std::vector<uint8_t> bytes;
-        if (! readFile (file, bytes)) { whyNot = "Couldn't read " + nameOf (file) + " (or it is over 300 MB). Nothing was loaded."; return false; }
-        Job j; j.type = Job::Load; j.layer = layer; j.path = file;
-        std::string err;
-        if (! readWav (bytes.data(), bytes.size(), j.audio, err)) { whyNot = nameOf (file) + ": " + err + " Nothing was loaded."; return false; }
-        j.hash = hashBytes (bytes.data(), bytes.size()); j.size = bytes.size(); j.chosen = file; j.stage = 1;
+
+        // Read the files of this layer one after another, only as many as the 10 s rule needs; every one used is checked.
+        std::vector<LayerAudio> parts;
+        std::vector<Binding::Part> read;
+        for (const auto& file : item.files)
+        {
+            std::vector<uint8_t> bytes;
+            if (! readFile (file, bytes)) { whyNot = "Couldn't read " + nameOf (file) + " (or it is over 300 MB). Nothing was loaded."; return false; }
+            LayerAudio a; std::string err;
+            if (! readWav (bytes.data(), bytes.size(), a, err)) { whyNot = nameOf (file) + ": " + err + " Nothing was loaded."; return false; }
+            read.push_back ({ file, (uint64_t) bytes.size(), hashBytes (bytes.data(), bytes.size()) });
+            parts.push_back (std::move (a));
+            if (joinedSeconds (parts, gapSeconds) > kJoinStopSeconds) break;
+        }
+        Job j; j.type = Job::Load; j.layer = layer; j.path = item.files[0];
+        JoinResult jr;
+        if (! joinLayerAudio (parts, gapSeconds, j.audio, jr)) { whyNot = nameOf (item.files[0]) + ": the files couldn't be joined. Nothing was loaded."; return false; }
+        j.hash = read[0].hash; j.size = read[0].size; j.chosen = item.files[0]; j.stage = 1;
+        for (size_t k = 1; k < jr.used && k < read.size(); ++k) j.parts.push_back (read[k]);
+        j.gapMs = jr.used > 1 ? (int) std::lround (gapSeconds * 1000.0) : 0;
+        JoinInfo ji; ji.layer = layer; ji.used = (int) jr.used; ji.leftOut = (int) item.files.size() - (int) jr.used; ji.seconds = jr.seconds; ji.cut = jr.cut;
+        infos.push_back (ji);
         jobs.push_back (std::move (j));
     }
     for (auto& j : jobs)
@@ -178,6 +220,7 @@ bool LayerLibrary::loadMany (const std::vector<std::pair<int, std::string>>& fil
         slots[j.layer].status = Working; slots[j.layer].message = "loading...";
         enqueue (std::move (j));
     }
+    if (info) *info = std::move (infos);
     return true;
 }
 
@@ -358,9 +401,9 @@ void LayerLibrary::restore (const std::vector<std::pair<int, Binding>>& list)
         listed[layer] = true;
         Slot& s = slots[layer];
         const bool holds = engine.layerState (layer) == Engine::LayerFilled;
-        if (s.bound && s.b.hash == b.hash && s.b.size == b.size && holds && ! s.queued)
-        {   // already there (the host set the same state again): keep the audio, take the (possibly updated) path
-            s.b.path = b.path; continue;
+        if (s.bound && sameBinding (s.b, b) && holds && ! s.queued)
+        {   // already there (the host set the same state again): keep the audio, take the (possibly updated) paths
+            s.b.path = b.path; s.b.more = b.more; continue;
         }
         // a queued job for this layer is replaced
         for (auto it = queue.begin(); it != queue.end(); ++it)
@@ -389,6 +432,7 @@ LayerLibrary::LayerInfo LayerLibrary::info (int layer) const
     r.bound = s.bound; r.status = s.status; r.message = s.message;
     r.fileName = s.bound ? nameOf (s.b.path) : std::string();
     r.fullPath = s.bound ? toAbsolute (s.b.path) : std::string();
+    r.files = s.bound ? 1 + (int) s.b.more.size() : 1;
     r.unsaved = ! s.bound && engine.layerState (layer) == Engine::LayerFilled;
     return r;
 }
@@ -455,6 +499,33 @@ bool LayerLibrary::stepJob (Job& j)
         if (! readFile (j.chosen, bytes) || ! readWav (bytes.data(), bytes.size(), j.audio, err))
         { s.status = Failed; s.message = "couldn't read " + nameOf (j.chosen) + (err.empty() ? "" : ": " + err); return true; }
         j.changed = changed; j.stage = 1;
+        if (! j.want.more.empty())
+        {   // a joined layer: find and read the other files too, then join them the same way as before
+            std::vector<LayerAudio> parts;
+            parts.push_back (std::move (j.audio));
+            j.parts.clear();
+            for (const auto& mp : j.want.more)
+            {
+                Binding bw; bw.path = mp.path; bw.size = mp.size; bw.hash = mp.hash;
+                std::string chosen2; uint64_t h2 = 0, s2 = 0; bool ch2 = false;
+                if (! findFile (bw, chosen2, h2, s2, ch2))
+                {
+                    s.status = Missing; s.message = "missing: " + nameOf (mp.path) + (home.empty() ? " (no home folder set)" : "");
+                    return true;
+                }
+                std::vector<uint8_t> b2; LayerAudio a2; std::string e2;
+                if (! readFile (chosen2, b2) || ! readWav (b2.data(), b2.size(), a2, e2))
+                { s.status = Failed; s.message = "couldn't read " + nameOf (chosen2) + (e2.empty() ? "" : ": " + e2); return true; }
+                parts.push_back (std::move (a2));
+                j.parts.push_back ({ chosen2, s2, h2 });
+                j.changed = j.changed || ch2;
+            }
+            JoinResult jr;
+            if (! joinLayerAudio (parts, (double) j.want.gapMs / 1000.0, j.audio, jr))
+            { s.status = Failed; s.message = "couldn't join the files of " + nameOf (j.chosen); return true; }
+            if (j.parts.size() + 1 > jr.used) j.parts.resize (jr.used > 0 ? jr.used - 1 : 0);
+            j.gapMs = j.parts.empty() ? 0 : j.want.gapMs;
+        }
         s.status = Working; s.message = "loading " + nameOf (j.chosen) + "...";
     }
     if (j.stage == 1)
@@ -476,8 +547,10 @@ bool LayerLibrary::stepJob (Job& j)
         if (++j.attempts > 200) { s.status = Failed; s.message = "couldn't load " + nameOf (j.chosen); return true; }
         j.stage = 1; j.waitTicks = 0; return false;
     }
+    const std::string more = j.parts.empty() ? std::string() : " + " + std::to_string (j.parts.size()) + " more (joined)";
     bindSlot (j.layer, j.chosen, j.hash, j.size, engine.layerRevision (j.layer), engine.layerEditCount (j.layer),
-              j.changed ? Changed : Ok, j.changed ? "loaded " + nameOf (j.chosen) + " (the file has changed since it was saved)" : "loaded " + nameOf (j.chosen));
+              j.changed ? Changed : Ok, j.changed ? "loaded " + nameOf (j.chosen) + more + " (a file has changed since it was saved)" : "loaded " + nameOf (j.chosen) + more,
+              &j.parts, j.gapMs);
     return true;
 }
 

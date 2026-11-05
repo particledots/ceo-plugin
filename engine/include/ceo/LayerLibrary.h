@@ -7,6 +7,8 @@
 //    file is inside it), the file size and a fingerprint (hash of the file's bytes).
 //  * The bindings are what a project stores (bindings() / restore()). On restore each bound layer is loaded from its file.
 //    If the file isn't where it was, the home folder and its sub-folders are searched for a file with the same size and fingerprint.
+//  * A layer made by joining several short files (milestone 12) is bound to all of them: the first in path/size/hash, the others in 'more',
+//    plus the gap used. On restore each file is found (moved ones too) and the layer is joined again the same way.
 //  * A binding is dropped when the user changes the layer (records over it, erases it). If a sample-rate change empties the layers,
 //    the bound ones are loaded again from their files at the new rate.
 #pragma once
@@ -26,7 +28,13 @@ class LayerLibrary
 {
 public:
     enum Status { NotBound = 0, Waiting, Working, Ok, Changed, Missing, Failed };
-    struct Binding { std::string path; uint64_t size = 0; uint64_t hash = 0; };   // path: relative to the home folder if inside it, else absolute
+    struct Binding
+    {
+        struct Part { std::string path; uint64_t size = 0; uint64_t hash = 0; };      // a further file of a joined layer
+        std::string path; uint64_t size = 0; uint64_t hash = 0;                       // path: relative to the home folder if inside it, else absolute
+        std::vector<Part> more;                                                       // empty unless the layer was joined from several files
+        int gapMs = 0;                                                                // the gap between joined files
+    };
     struct LayerInfo
     {
         bool bound = false;
@@ -35,6 +43,7 @@ public:
         std::string fileName;       // just the name of the file
         std::string fullPath;       // where that file is now (absolute)
         std::string message;        // a short sentence for the status line ("saved", "missing: ...")
+        int files = 1;              // how many files the layer was joined from (1 = a single file)
     };
 
     explicit LayerLibrary (Engine& e);
@@ -49,6 +58,12 @@ public:
     // Load several files at once (a Scene). Every file is read and checked first: if any one fails, nothing is loaded and 'whyNot' says which.
     // Layers not listed are left alone.
     bool loadMany (const std::vector<std::pair<int, std::string>>& files, std::string& whyNot);
+
+    // Like loadMany, but a layer may have several files: they are joined (0.25 s gap by default, the 10 s rule, see LayerAudio.h) into one layer.
+    // 'left out' counts the files of a layer that were not needed because the layer was already past 10 s (they are not even read).
+    struct LoadItem { int layer = 0; std::vector<std::string> files; };
+    struct JoinInfo { int layer = 0; int used = 1; int leftOut = 0; double seconds = 0.0; bool cut = false; };
+    bool loadGroups (const std::vector<LoadItem>& items, double gapSeconds, std::string& whyNot, std::vector<JoinInfo>* info = nullptr);
 
     // Save a Scene: every layer that holds audio goes to <folder>/<n>_<name>.wav, plus the settings text as "Ceo scene.txt".
     // Nothing is deleted: files already in the folder are renamed to "_was_<date>_<name>" once all the audio has been collected, and the new files
@@ -91,6 +106,8 @@ private:
         std::string path;               // Save: destination.  Load: the file (absolute), or empty for a restore (resolved from the binding)
         bool restore = false;
         Binding want;                   // restore: what to find
+        std::vector<Binding::Part> parts;   // a joined layer: the further files actually used (absolute paths)
+        int gapMs = 0;
         int stage = 0;
         int attempts = 0;               // how often the engine turned an import down
         int waitTicks = 0;              // how long we have been waiting for the audio thread
@@ -125,7 +142,9 @@ private:
     std::string toAbsolute (const std::string& stored) const;
     bool findFile (const Binding& want, std::string& chosen, uint64_t& hash, uint64_t& size, bool& changed) const;
     static bool readFile (const std::string& path, std::vector<uint8_t>& out);
-    void bindSlot (int layer, const std::string& absoluteFile, uint64_t hash, uint64_t size, uint32_t rev, uint32_t edit, Status st, const std::string& msg);
+    void bindSlot (int layer, const std::string& absoluteFile, uint64_t hash, uint64_t size, uint32_t rev, uint32_t edit, Status st, const std::string& msg,
+                   const std::vector<Binding::Part>* more = nullptr, int gapMs = 0);
+    static bool sameBinding (const Binding& a, const Binding& b);
     void enqueue (Job j);
     bool stepJob (Job& j);              // true when finished
 };

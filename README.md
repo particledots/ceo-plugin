@@ -10,7 +10,25 @@ about 12% of one core on average and at most about a third of a block's time for
 was left exactly as it was. The build now also runs pluginval on the AU and the VST3 (results are in the package as
 `pluginval-AU.log` and `pluginval-VST3.log`).
 
-Version 0.11.0 (milestone 11, waiting for a test in Logic): **Scenes**. A Scene is a folder of up to six WAV files (one per
+Version 0.12.0 (milestone 12, waiting for a test in Logic): **joining short files**, **Onset capture from presets**.
+
+- The **Load** menu has a new tick line, *Join short files into one layer* (off by default; remembered per computer).
+  With it on, several files whose names start with the same digit 1 to 6 are laid one after another into that layer, in
+  alphabetical order, with a 0.25 s gap, like an Arbhar library slot: files are added until the total is more than 10 s
+  (the file that crosses 10 s is still included, the gap counts, later files are not even read) and anything past 13 s is
+  cut. A few thousandths of a second of fade sit on each join. Mono and stereo files can be mixed (mono goes on both
+  sides) and other sample rates are converted. With it off, only the first file of each layer loads, as before, and the
+  report says how many more were not loaded. Folders without digits in the file names are not joined.
+- A joined layer is linked to all its files: the project stores them (and the gap) so the layer comes back when the
+  project reopens; moved or renamed files are found by size and fingerprint, a missing file shows "Missing: name" and the
+  layer stays empty, a changed file is flagged. The status line shows "linked to name + N more (joined)". The load
+  report lists the files joined, those not used, and the seconds.
+- Presets from the Arbhar (OnsetMode alpha or beta) no longer switch Onset capture on: it records over the selected layer
+  whenever sound arrives, which would overwrite the layers just loaded. OnsetMode 0 still switches it off. The report
+  explains it. Ceo's own `Ceo scene.txt` still brings Onset capture back as it was saved.
+- Mod target Pan is unchanged (decided with Bryn). No new parameters; all 26 ids unchanged; the audio engine is unchanged.
+
+Version 0.11.0 (milestone 11, tested in Logic): **Scenes**. A Scene is a folder of up to six WAV files (one per
 layer, α to ζ) plus a settings file, like the Arbhar's scene folders.
 
 - Two boxes in the top corners. **Scene** (left): the Scenes in your Scenes folder, *Browse for a Scene folder...*,
@@ -23,7 +41,7 @@ layer, α to ζ) plus a settings file, like the Arbhar's scene folders.
   The `#ARB` file is read tolerantly (only `PARAMETER:` and `PRESET_NAME:` lines count; the damaged comment blocks in the
   real files do not matter). *As the file says* follows its Load Configuration (0 nothing, 1 settings only, 2 layers only,
   3 both); the Load box overrides it. Taken from a preset: InputMode, ModCV (Panning, Hold, Reverb, Delay), FollowMode,
-  OnsetMode (alpha/beta turn Onset capture on) and the QuantiseTable (nearest Pitch Scale, named in the report). Everything
+  OnsetMode (0 switches Onset capture off; alpha/beta leave it alone since 0.12.0) and the QuantiseTable (nearest Pitch Scale, named in the report). Everything
   else is listed as ignored.
 - *Save Scene...* writes `1_alpha.wav` to `6_zeta.wav` (only layers that hold audio, 16-bit) and `Ceo scene.txt`.
   Nothing is deleted: files already in the folder are renamed to `_was_<date>_<name>`, after all the audio has been
@@ -76,7 +94,7 @@ Earlier milestones: the styled panel (milestones 6 and 7: squarer layout, round 
 switching itself off when the layer is full), six layers α to ζ (10 s plus a 3 s tail each) and Ω; Capture, Dub,
 Erase, Undo, Strike, Pitch deviation, Follow mode, Onset capture with Hold and Sense, Mono/Stereo input, the Mod
 section (Pan, Hold, Reverb, Delay) and Wavetable mode.
-Not yet working: Scenes (folders of six WAVs, milestone 11) and the Reaper VST3 test (milestone 12).
+Not yet working: the Reaper VST3 test (milestone 13, optional).
 
 ## Folders
 
