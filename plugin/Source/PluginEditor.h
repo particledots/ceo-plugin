@@ -7,6 +7,7 @@
 #include "PluginProcessor.h"
 #include "CeoLookAndFeel.h"
 #include "CeoControls.h"
+#include "CeoArt.h"
 #include "StreamDisplay.h"
 
 #include <memory>
@@ -72,6 +73,7 @@ private:
     };
 
     void timerCallback() override;
+    void renderGround (float scale);
     CeoKnob& addKnob (const char* parameterId, const char* label, int centreX, int row);
     void setUpPitchReadout (CeoKnob&);
     void setUpLatchingButton (juce::TextButton&, const char* text, const char* parameterId, std::unique_ptr<ButtonAttachment>&);
@@ -111,6 +113,12 @@ private:
     // Pitch deviation.
     static juce::Rectangle<int> pitchSnapSlot()  { return juce::Rectangle<int> (84, 24).withCentre  ({ kRightColumn0, rowTop (3) + 82 + 12 }); }
     static juce::Rectangle<int> pitchScaleSlot() { return juce::Rectangle<int> (108, 24).withCentre ({ kRightColumn1, rowTop (3) + 82 + 12 }); }
+
+    juce::SharedResourcePointer<CeoArt> art;      // fonts and cached pictures (milestone 13: option C look)
+    juce::Image ground;                           // the static panel picture, redrawn only when the pixel scale changes
+    float groundScale = 0.0f;
+    bool reducedMotion = false;
+    int motionCheckTicks = 0;
 
     CeoAudioProcessor& processor;
     juce::AudioProcessorValueTreeState& state;

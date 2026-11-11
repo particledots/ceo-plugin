@@ -4,9 +4,6 @@
 namespace
 {
     constexpr int kKnobSize   = 60;
-    constexpr int kCellWidth  = 110;
-    constexpr int kLabelGap   = 62;     // from the top of a knob to its label
-    constexpr int kLabelHeight = 16;
     constexpr int kExtraTop   = 82;     // from the top of a knob to the small control under its label
     constexpr int kRowPitch   = 116;    // from one knob row to the next
 }
@@ -20,7 +17,7 @@ namespace
 //   Pitch Snap menu under Pitch, Pitch Scale menu under Pitch deviation (milestone 8)
 //   layer dial, centre at (392, 212), 2 times the old size
 //   Capture (+ Onset under it) left and Strike (+ Erase, Undo under it) right, under the dial, y 372 to 452
-//   stream display x 112 to 672, y 526 to 652
+//   stream display: glass x 112 to 672, y 526 to 652, with a 6 wide bezel round it (component x 106 to 678, y 520 to 658)
 //==============================================================================
 
 int CeoPanel::rowTop (int row)
@@ -95,6 +92,10 @@ CeoPanel::CeoPanel (CeoAudioProcessor& p)
     addAndMakeVisible (layerDial);
     addAndMakeVisible (display);
     controlIds.push_back (CeoParams::layer);          // the dial is attached to the layer parameter
+
+    reducedMotion = CeoStyle::prefersReducedMotion();
+    display.setReducedMotion (reducedMotion);
+    layerDial.setReducedMotion (reducedMotion);
 
     setSize (kWidth, kHeight);
     startTimerHz (30);
@@ -193,7 +194,8 @@ void CeoPanel::setUpDropdown (juce::ComboBox& box, const char* parameterId, std:
 
 juce::Rectangle<int> CeoPanel::knobBounds (const KnobCell& cell) const
 {
-    return { cell.centreX - kKnobSize / 2, rowTop (cell.row), kKnobSize, kKnobSize };
+    // Drawn in an 84 x 84 square round the same centre as the old 60 x 60 knob (its scale ticks reach beyond it).
+    return juce::Rectangle<int> (CeoGeo::knobBox, CeoGeo::knobBox).withCentre ({ cell.centreX, rowTop (cell.row) + kKnobSize / 2 });
 }
 
 juce::Rectangle<int> CeoPanel::ledArea() const
@@ -226,7 +228,7 @@ void CeoPanel::resized()
     sceneBox.setBounds (20, 11, 226, 26);
     loadBox.setBounds  (538, 11, 226, 26);
 
-    display.setBounds (112, 526, 560, 126);
+    display.setBounds (106, 520, CeoGeo::displayW, CeoGeo::displayH);     // the glass stays at x 112, y 526, 560 x 126
 
     auto extraUnder = [this] (int row, int centreX, int width, int height)
     {
@@ -239,36 +241,49 @@ void CeoPanel::resized()
     pitchScaleBox.setBounds (pitchScaleSlot());                          // under Pitch deviation
 }
 
+void CeoPanel::renderGround (float scale)
+{
+    using namespace CeoStyle;
+
+    const int pw = juce::jmax (1, juce::roundToInt ((float) kWidth * scale));
+    const int ph = juce::jmax (1, juce::roundToInt ((float) kHeight * scale));
+    ground = juce::Image (juce::Image::ARGB, pw, ph, true);
+    juce::Graphics g (ground);
+    g.addTransform (juce::AffineTransform::scale ((float) pw / (float) kWidth, (float) ph / (float) kHeight));
+
+    // Panel, grain, bevel, screws and the title "Ceo" with its grave accent
+    art->paintGround (g, scale);
+
+    // Knob labels
+    g.setColour (lettering());
+    g.setFont (font (12.5f).withExtraKerningFactor (0.5f / 12.5f));
+    for (const auto& cell : knobs)
+        g.drawSingleLineText (cell->label, cell->centreX, rowTop (cell->row) + 75, juce::Justification::horizontallyCentred);
+}
+
 void CeoPanel::paint (juce::Graphics& g)
 {
     using namespace CeoStyle;
 
-    const auto bounds = getLocalBounds().toFloat();
-    g.setColour (background());
-    g.fillRoundedRectangle (bounds, 10.0f);
-    g.setColour (border());
-    g.drawRoundedRectangle (bounds.reduced (0.5f), 10.0f, 1.0f);
+    // The static art is one cached picture, made at the pixel scale the panel is really shown at.
+    const float physical = g.getInternalContext().getPhysicalPixelScaleFactor();
+    const float quantised = CeoArt::quantise (physical);
+    if (ground.isNull() || groundScale != quantised)
+    {
+        renderGround (quantised);
+        groundScale = quantised;
+    }
+    g.drawImage (ground, getLocalBounds().toFloat());
 
-    // Title "Ceo"
-    g.setColour (title());
-    g.setFont (font (24.0f, true));
-    g.drawText (juce::String ("Ceo"), juce::Rectangle<int> (0, 10, kWidth, 32), juce::Justification::centred, false);
-
-    // The two status lines of milestone 10 (line A: the selected layer's file; line B: the home folder and what is unsaved)
-    g.setFont (font (12.5f));
-    g.setColour (statusColour);
-    g.drawText (statusA, juce::Rectangle<int> (92, 492, kWidth - 184, 18), juce::Justification::centred, true);
-    g.setFont (font (11.0f));
-    g.setColour (lettering().withAlpha (0.6f));
-    g.drawText (statusB, juce::Rectangle<int> (92, 509, kWidth - 184, 16), juce::Justification::centred, true);
-
-    // Knob labels
-    g.setColour (lettering());
-    g.setFont (font (12.5f));
-    for (const auto& cell : knobs)
-        g.drawText (cell->label,
-                    juce::Rectangle<int> (cell->centreX - kCellWidth / 2, rowTop (cell->row) + kLabelGap, kCellWidth, kLabelHeight),
-                    juce::Justification::centred, false);
+    // The two status lines of milestone 10 (line A: the selected layer's file; line B: the home folder and what is unsaved).
+    // Skipped when only a small corner (the direction lights, say) is being repainted.
+    if (g.getClipBounds().intersects (juce::Rectangle<int> (92, 487, kWidth - 184, 34)))
+    {
+        g.setColour (statusColour);
+        drawMixedText (g, statusA, juce::Rectangle<float> (92.0f, 487.0f, (float) kWidth - 184.0f, 18.0f), font (12.5f), fontGreek (14.0f));
+        g.setColour (lettering().withAlpha (0.6f));
+        drawMixedText (g, statusB, juce::Rectangle<float> (92.0f, 504.0f, (float) kWidth - 184.0f, 16.0f), font (11.0f), fontGreek (12.0f));
+    }
 
     // The two direction lights under Grain direction: backwards on the left, forwards on the right.
     const auto leds = ledArea();
@@ -279,19 +294,26 @@ void CeoPanel::paint (juce::Graphics& g)
 
     auto drawLed = [&] (float x, float level)
     {
-        g.setColour (goldRim().withAlpha (0.55f));
-        g.drawEllipse (x - 3.5f, cy - 3.5f, 7.0f, 7.0f, 1.0f);
-        g.setColour (goldPointer().withAlpha (0.12f + 0.88f * level));
+        g.setColour (juce::Colour (0xFF0B0604));
+        g.fillEllipse (x - 4.0f, cy - 4.0f, 8.0f, 8.0f);
+        g.setColour (goldRim().withAlpha (0.6f));
+        g.drawEllipse (x - 4.0f, cy - 4.0f, 8.0f, 8.0f, 1.0f);
+        if (level > 0.5f)
+        {
+            g.setOpacity (level);
+            g.drawImage (art->halo (7), juce::Rectangle<float> (x - 9.0f, cy - 9.0f, 18.0f, 18.0f));
+        }
+        g.setColour (glow().withAlpha (0.15f + 0.85f * level));
         g.fillEllipse (x - 3.0f, cy - 3.0f, 6.0f, 6.0f);
     };
     drawLed (cx - 14.0f, reverse);
     drawLed (cx + 14.0f, forward);
 
-    g.setColour (lettering().withAlpha (0.8f));
+    g.setColour (goldRim().withAlpha (0.8f));
     juce::Path back, fwd;
     // The arrows point outwards: left = backwards, right = forwards.
-    back.addTriangle (cx - 26.0f, cy, cx - 21.0f, cy - 3.0f, cx - 21.0f, cy + 3.0f);
-    fwd.addTriangle  (cx + 26.0f, cy, cx + 21.0f, cy - 3.0f, cx + 21.0f, cy + 3.0f);
+    back.addTriangle (cx - 27.0f, cy, cx - 22.0f, cy - 3.0f, cx - 22.0f, cy + 3.0f);
+    fwd.addTriangle  (cx + 27.0f, cy, cx + 22.0f, cy - 3.0f, cx + 22.0f, cy + 3.0f);
     g.fillPath (back);
     g.fillPath (fwd);
 }
@@ -396,6 +418,7 @@ void CeoPanel::updateSceneBoxes()
 void CeoPanel::showLoadMenu()
 {
     juce::PopupMenu m;
+    m.setLookAndFeel (&getLookAndFeel());
     for (int i = 0; i < 4; ++i)
         m.addItem (i + 1, kLoadNames[i], true, processor.getLoadWhat() == i);
     m.addSeparator();
@@ -420,6 +443,7 @@ void CeoPanel::showSceneMenu()
     const auto scenes = ceo::scene::listScenes (scenesFolder.getFullPathName().toStdString());
 
     juce::PopupMenu m;
+    m.setLookAndFeel (&getLookAndFeel());
     juce::StringArray paths;
     for (const auto& s : scenes)
     {
@@ -622,13 +646,27 @@ void CeoPanel::updateFileStrip()
     if (a != statusA || b != statusB || colour != statusColour)
     {
         statusA = a; statusB = b; statusColour = colour;
-        repaint (92, 492, kWidth - 184, 36);
+        repaint (92, 487, kWidth - 184, 34);
     }
 }
 
 void CeoPanel::timerCallback()
 {
+    // Once a second: has the system been asked for less motion?
+    if (--motionCheckTicks <= 0)
+    {
+        motionCheckTicks = 30;
+        const bool reduce = CeoStyle::prefersReducedMotion();
+        if (reduce != reducedMotion)
+        {
+            reducedMotion = reduce;
+            display.setReducedMotion (reduce);
+            layerDial.setReducedMotion (reduce);
+        }
+    }
+
     display.tick();
+    layerDial.tickAnimation();
     updateFileStrip();
     repaint (ledArea());
 }
@@ -657,7 +695,7 @@ CeoEditor::~CeoEditor()
 
 void CeoEditor::paint (juce::Graphics& g)
 {
-    g.fillAll (CeoStyle::background());
+    g.fillAll (CeoStyle::windowBackground());
 }
 
 void CeoEditor::resized()
