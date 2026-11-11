@@ -8,12 +8,12 @@
 namespace CeoStyle
 {
     // Panel and metal
-    inline juce::Colour windowBackground()  { return juce::Colour (0xFF0A0603); }   // behind the rounded panel corners
-    inline juce::Colour panelTop()          { return juce::Colour (0xFF2D1B0F); }
-    inline juce::Colour panelBottom()       { return juce::Colour (0xFF160B05); }
-    inline juce::Colour background()        { return juce::Colour (0xFF1E1109); }   // drop-down menus; text on a lit button
+    inline juce::Colour windowBackground()  { return juce::Colour (0xFF0B0807); }   // behind the rounded panel corners
+    inline juce::Colour panelTop()          { return juce::Colour (0xFF2B2019); }
+    inline juce::Colour panelBottom()       { return juce::Colour (0xFF18110D); }
+    inline juce::Colour background()        { return juce::Colour (0xFF1C1411); }   // drop-down menus; text on a lit button
     inline juce::Colour border()            { return juce::Colour (0xFF7A5630); }   // outer edge of the panel
-    inline juce::Colour knobFill()          { return juce::Colour (0xFF3A2312); }   // middle of a button
+    inline juce::Colour knobFill()          { return juce::Colour (0xFF3A2619); }   // middle of a button
     inline juce::Colour goldRim()           { return juce::Colour (0xFFB8903F); }   // brass keyline
     inline juce::Colour goldPointer()       { return juce::Colour (0xFFFFEDB0); }   // knob pointer
     inline juce::Colour lamp()              { return juce::Colour (0xFFE3BE6A); }   // little lamps, menu arrows
