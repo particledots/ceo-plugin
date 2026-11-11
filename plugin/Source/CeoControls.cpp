@@ -80,10 +80,8 @@ void LayerDial::paint (juce::Graphics& g)
         juce::Path pointer;
         pointer.startNewSubPath (c.x + 10.0f * s, c.y + 10.0f * co);
         pointer.lineTo          (c.x + 48.0f * s, c.y + 48.0f * co);
-        g.setColour (juce::Colour (0xFF1A0E06).withAlpha (0.7f));
-        g.strokePath (pointer, juce::PathStrokeType (9.0f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
-        g.setColour (goldPointer());
-        g.strokePath (pointer, juce::PathStrokeType (4.5f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+        g.setColour (juce::Colour (0xFF15100C));
+        g.strokePath (pointer, juce::PathStrokeType (5.5f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
     }
 
     // Breathing phase of the selected halo, 0..1 over 1.8 s

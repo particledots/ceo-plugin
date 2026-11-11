@@ -207,24 +207,20 @@ void CeoArt::paintKnobBody (juce::Graphics& g)
 
     softShadow (g, cx + 2.0f, cy + 5.0f, 34.0f);
 
-    // Knurled ring
-    g.setColour (juce::Colour (0xFF2B1A0B));
+    // Rogan style: matt black skirt with fine knurling, white cap
+    g.setColour (juce::Colour (0xFF121010));
     g.fillEllipse (cx - 29.0f, cy - 29.0f, 58.0f, 58.0f);
-    g.setColour (blackA (0.6f));
+    g.setColour (blackA (0.7f));
     g.drawEllipse (cx - 29.0f, cy - 29.0f, 58.0f, 58.0f, 1.0f);
     knurl (g, cx, cy, 26.5f, 29.0f, 48, 1.1f);
+    g.setColour (whiteA (0.10f));
+    g.drawEllipse (cx - 27.5f, cy - 27.5f, 55.0f, 55.0f, 0.8f);
 
-    // Brass cap with faint machined rings and a soft highlight
-    g.setGradientFill (brassCap (cx, cy, 22.0f));
+    juce::ColourGradient cap (juce::Colour (0xFFF7F4EC), cx - 7.0f, cy - 9.0f, juce::Colour (0xFFD2CCBE), cx + 12.0f, cy + 16.0f, true);
+    g.setGradientFill (cap);
     g.fillEllipse (cx - 22.0f, cy - 22.0f, 44.0f, 44.0f);
-    g.setColour (blackA (0.5f));
+    g.setColour (blackA (0.45f));
     g.drawEllipse (cx - 22.0f, cy - 22.0f, 44.0f, 44.0f, 1.0f);
-    g.setColour (whiteA (0.09f));
-    g.drawEllipse (cx - 15.0f, cy - 15.0f, 30.0f, 30.0f, 1.0f);
-    g.setColour (blackA (0.25f));
-    g.drawEllipse (cx - 9.0f, cy - 9.0f, 18.0f, 18.0f, 1.0f);
-    g.setColour (whiteA (0.12f));
-    g.fillEllipse (cx - 4.0f - 14.0f, cy - 12.0f - 7.0f, 28.0f, 14.0f);
 }
 
 void CeoArt::paintKnobTicks (juce::Graphics& g, int lit)
@@ -266,26 +262,18 @@ void CeoArt::paintDialBody (juce::Graphics& g)
     softShadow (g, cx + 2.0f, cy + 8.0f, 84.0f);
 
     // Housing and the 96-tooth ring
-    g.setColour (juce::Colour (0xFF241408));
+    g.setColour (juce::Colour (0xFF121010));
     g.fillEllipse (cx - 66.0f, cy - 66.0f, 132.0f, 132.0f);
     g.setColour (blackA (0.7f));
     g.drawEllipse (cx - 66.0f, cy - 66.0f, 132.0f, 132.0f, 2.0f);
     knurl (g, cx, cy, 59.0f, 64.0f, 96, 1.3f);
 
-    // Brass cap
-    g.setGradientFill (brassCap (cx, cy, 52.0f));
+    // White cap (Rogan style)
+    juce::ColourGradient cap (juce::Colour (0xFFF7F4EC), cx - 16.0f, cy - 22.0f, juce::Colour (0xFFD2CCBE), cx + 30.0f, cy + 40.0f, true);
+    g.setGradientFill (cap);
     g.fillEllipse (cx - 52.0f, cy - 52.0f, 104.0f, 104.0f);
-    g.setColour (blackA (0.5f));
+    g.setColour (blackA (0.45f));
     g.drawEllipse (cx - 52.0f, cy - 52.0f, 104.0f, 104.0f, 1.0f);
-    for (float r : { 40.0f, 28.0f, 16.0f })
-    {
-        g.setColour (whiteA (0.07f));
-        g.drawEllipse (cx - r, cy - r, r * 2.0f, r * 2.0f, 1.0f);
-        g.setColour (blackA (0.2f));
-        g.drawEllipse (cx - r, cy - r + 1.0f, r * 2.0f, r * 2.0f, 1.0f);
-    }
-    g.setColour (whiteA (0.10f));
-    g.fillEllipse (cx - 6.0f - 34.0f, cy - 26.0f - 15.0f, 68.0f, 30.0f);
 
     // Seven recessed sockets for the layer "jewels"
     for (int i = 0; i < 7; ++i)

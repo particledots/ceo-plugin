@@ -50,10 +50,8 @@ void CeoLookAndFeel::drawRotarySlider (juce::Graphics& g, int x, int y, int widt
     juce::Path pointer;
     pointer.startNewSubPath (centre.x + s * 5.0f,  centre.y + c * 5.0f);
     pointer.lineTo          (centre.x + s * 22.0f, centre.y + c * 22.0f);
-    g.setColour (juce::Colour (0xFF1A0E06).withAlpha (0.7f));
-    g.strokePath (pointer, juce::PathStrokeType (5.5f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
-    g.setColour (goldPointer());
-    g.strokePath (pointer, juce::PathStrokeType (2.6f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+    g.setColour (juce::Colour (0xFF15100C));
+    g.strokePath (pointer, juce::PathStrokeType (3.2f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
 }
 
 void CeoLookAndFeel::drawButtonBackground (juce::Graphics& g, juce::Button& button, const juce::Colour&,
