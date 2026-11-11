@@ -66,8 +66,8 @@ CeoArt::CeoArt()
     jostRegular = juce::Typeface::createSystemTypefaceFor (BinaryData::JostRegular_ttf,                  (size_t) BinaryData::JostRegular_ttfSize);
     jostMed     = juce::Typeface::createSystemTypefaceFor (BinaryData::JostMedium_ttf,                   (size_t) BinaryData::JostMedium_ttfSize);
     jostIt      = juce::Typeface::createSystemTypefaceFor (BinaryData::JostItalic_ttf,                   (size_t) BinaryData::JostItalic_ttfSize);
-    titleFace   = juce::Typeface::createSystemTypefaceFor (BinaryData::CormorantGaramondSemiBoldLatin_ttf, (size_t) BinaryData::CormorantGaramondSemiBoldLatin_ttfSize);
-    greekFace   = juce::Typeface::createSystemTypefaceFor (BinaryData::EBGaramondMediumGreek_ttf,       (size_t) BinaryData::EBGaramondMediumGreek_ttfSize);
+    titleFace   = juce::Typeface::createSystemTypefaceFor (BinaryData::JostMedium_ttf, (size_t) BinaryData::JostMedium_ttfSize);
+    greekFace   = juce::Typeface::createSystemTypefaceFor (BinaryData::DidactGothicRegular_ttf,       (size_t) BinaryData::DidactGothicRegular_ttfSize);
 
     if (gCurrent == nullptr)
         gCurrent = this;
@@ -397,20 +397,19 @@ void CeoArt::paintGround (juce::Graphics& g, float physicalScale)
         g.drawLine (s.x - 5.0f * c, s.y - 5.0f * sn, s.x + 5.0f * c, s.y + 5.0f * sn, 2.0f);
     }
 
-    // The title: gold gradient with a thin dark outline
+    // The title: flat gold lettering with a small shadow
     {
-        const auto f = title (38.0f).withExtraKerningFactor (4.0f / 38.0f);
+        const auto f = title (36.0f).withExtraKerningFactor (5.0f / 36.0f);
         const auto text = juce::String::fromUTF8 ("Ce\xc3\xb2");
         const float w = juce::GlyphArrangement::getStringWidth (f, text);
         juce::GlyphArrangement ga;
         ga.addLineOfText (f, text, 392.0f - w * 0.5f, 46.0f);
         juce::Path p;
         ga.createPath (p);
-        const auto bb = p.getBounds();
-        g.setGradientFill (brassLine (bb));
+        g.setColour (blackA (0.45f));                                  // soft shadow under the gold lettering
+        g.fillPath (p, juce::AffineTransform::translation (0.0f, 1.5f));
+        g.setColour (CeoStyle::buttonText());                          // one flat gold, like the printed original
         g.fillPath (p);
-        g.setColour (blackA (0.5f));
-        g.strokePath (p, juce::PathStrokeType (0.6f));
     }
 }
 

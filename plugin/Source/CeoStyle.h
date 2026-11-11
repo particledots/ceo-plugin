@@ -47,8 +47,8 @@ namespace CeoStyle
     juce::Font font (float size);                 // Jost: labels, buttons, menus, status lines
     juce::Font fontMedium (float size);           // Jost Medium
     juce::Font fontItalic (float size);           // Jost Italic
-    juce::Font fontTitle (float size);            // Cormorant Garamond SemiBold: the title
-    juce::Font fontGreek (float size);            // EB Garamond Medium, Greek letters only
+    juce::Font fontTitle (float size);            // Jost Medium: the title
+    juce::Font fontGreek (float size);            // Didact Gothic, Greek letters only
 
     // Draws one line of text centred in 'area'. Greek letters (the layer names in the status line) are drawn
     // with the Greek font, everything else with 'latin'. If the line is too wide it is cut with "...".

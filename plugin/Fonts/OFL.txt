@@ -1,11 +1,8 @@
-The Ceo panel embeds three fonts (see plugin/Fonts). All three are free software
-under the SIL Open Font License, Version 1.1 (text below). They are used unmodified,
-except that Cormorant Garamond SemiBold is cut down to Basic Latin + Latin-1 (for the title)
-and EB Garamond Medium is cut down to the Greek block (for the layer letters), to keep the plugin small.
+The Ceo panel embeds two font families (see plugin/Fonts). Both are free software
+under the SIL Open Font License, Version 1.1 (text below). They are used unmodified.
 
-  Jost (Regular, Medium, Italic)      Copyright 2020 The Jost Project Authors (https://github.com/indestructible-type)
-  Cormorant Garamond (SemiBold)       Copyright 2015 the Cormorant Project Authors (github.com/CatharsisFonts/Cormorant)
-  EB Garamond (Medium)                Copyright 2017 The EB Garamond Project Authors (https://github.com/octaviopardo/EBGaramond12)
+  Jost (Regular, Medium, Italic)   Copyright 2020 The Jost Project Authors (https://github.com/indestructible-type)
+  Didact Gothic (Regular)          Copyright 2012 The Didact Gothic Project Authors (https://github.com/googlefonts/didact-gothic)
 
 To use other fonts, replace the files in plugin/Fonts (same file names) or change the names in
 plugin/CMakeLists.txt and plugin/Source/CeoArt.cpp (class CeoArt).

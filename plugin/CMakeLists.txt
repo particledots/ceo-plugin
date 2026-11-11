@@ -41,8 +41,7 @@ juce_add_binary_data(CeoFonts SOURCES
     Fonts/Jost-Regular.ttf
     Fonts/Jost-Medium.ttf
     Fonts/Jost-Italic.ttf
-    Fonts/CormorantGaramond-SemiBold-Latin.ttf
-    Fonts/EBGaramond-Medium-Greek.ttf
+    Fonts/DidactGothic-Regular.ttf
 )
 
 # ReduceMotion.cpp asks macOS whether "Reduce motion" is switched on, so it is compiled as Objective-C++ there.
